@@ -419,8 +419,8 @@ condtable
 ```
 
 #Model Building
-
-```{r eval=FALSE, results="hide"}
+```{r}
+#no-lag-setup
 df <- returns
 #when adding in lags need to take away the last row bc it doesn't have a y
 windowlength <- 80
@@ -430,8 +430,10 @@ linearpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 lassopredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 
 linearcoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
-lassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+lassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
+```
 
+```{r eval=FALSE, results="hide"}
 #windows run from the start of the window to the last full record
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -449,8 +451,7 @@ for (tau in windowlength:nrow(df)) {
         #combine for one df
         train.full <- cbind(train.target,train.predictors)
         #newdata for predicting tau + 1
-        tau.newdata <- df[tau, 2:ncol(df)]
-        tau.newdata <- train.newdata[, -j]
+        tau.newdata <- df[tau, (2:ncol(df))[2:ncol(df) != (j+1)]]
         
         #find historical mean value
         historicalmeanpredictions[tau+1,j] <- mean(train.target)
@@ -470,6 +471,72 @@ for (tau in windowlength:nrow(df)) {
                                         newx = as.matrix(tau.newdata),
                                     type = "response")
         lassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso.mancv))
+}
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+}
+```
+
+```{r}
+#3-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
+lag.0 <- returns[4:nrow(returns),] 
+lag.1 <- returns[3:(nrow(returns)-1),2:ncol(returns)]
+for (i in 1:ncol(lag.1)) colnames(lag.1)[i] <- paste(colnames(lag.1)[i],"_lag_1",sep="")
+lag.2 <- returns[2:(nrow(returns)-2),2:ncol(returns)]
+for (i in 1:ncol(lag.2)) colnames(lag.2)[i] <- paste(colnames(lag.2)[i],"_lag_2",sep="")
+lag.3 <- returns[1:(nrow(returns)-3),2:ncol(returns)]
+for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- paste(colnames(lag.3)[i],"_lag_3",sep="")
+df <- cbind(lag.0,lag.1,lag.2,lag.3)
+  
+#when adding in lags need to take away the last row bc it doesn't have a y
+windowlength <- 80
+
+laghistoricalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laglinearpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laglassopredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+
+laglinearcoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+laglassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
+```
+
+```{r eval=FALSE, results="hide"}
+#windows run from the start of the window to the last full record
+for (tau in windowlength:nrow(df)) {
+        for (j in 1:49){
+        
+        #creating target, train and prediction data
+        #for window at tau, for industry j
+        
+        #take j values for time 2 onwards
+        train.target <- df[(tau-windowlength+2):tau,j+1]
+        
+        #take away date column
+        train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
+        #take away target column from predictors
+        train.predictors <- train.predictors[, -j]
+        #combine for one df
+        train.full <- cbind(train.target,train.predictors)
+        #newdata for predicting tau + 1
+        tau.newdata <- df[tau, (2:ncol(df))[2:ncol(df) != (j+1)]]
+        
+        #find historical mean value
+        laghistoricalmeanpredictions[tau+1,j] <- mean(train.target)
+
+        #find linear model prediction
+        temp.mdl.linear <- lm(train.target ~ ., data=train.full)
+        laglinearpredictions[tau+1,j] <- predict(temp.mdl.linear,
+                                        newdata= tau.newdata)
+        laglinearcoefs[tau+1,] <- coef(temp.mdl.linear)
+        
+        #find cv with provided vals lasso prediction
+        temp.mdl.lasso.mancv <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1, nfolds=5,
+                               lambda = c(0.01,0.025,0.05))
+        laglassopredictions[tau+1,j] <- predict(temp.mdl.lasso.mancv,
+                                        newx = as.matrix(tau.newdata),
+                                    type = "response")
+        laglassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso.mancv))
 }
 ##because this code takes a while to run, print for progress
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
