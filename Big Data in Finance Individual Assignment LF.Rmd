@@ -1,0 +1,485 @@
+---
+title: "Big Data In Finance Individual Assignment"
+author: "Louise Fallon"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(readxl) #for read_excel
+library(ggplot2) #for ggplot
+library(forecast) #for ggseasonplot and autoplot etc
+library(reshape2) #for melt
+library(condformat) #for condformat and rule_fill_discrete
+library(glmnet)
+knitr::opts_chunk$set(cache = TRUE, echo=FALSE)
+```
+
+## Data
+
+```{r}
+#load data
+returns <- as.data.frame(read_excel("Data.xlsx", sheet = 1, col_names = TRUE, skip=3))
+#remove row of NAs at the bottom
+returns <- returns[complete.cases(returns),]
+#add date column header
+names(returns)[1] <- "date"
+#plot boxplot of returns
+meltedreturns <- melt(returns, id.vars = "date")
+ggplot(meltedreturns, aes(x=variable, y=value)) + geom_boxplot(col="#000066") + theme_bw() + theme(legend.position="none", axis.text.x = element_text(angle = 90, vjust=0.5)) + xlab("Industry") + ylab("Daily Returns")
+```
+
+Industry returns are generally centered around 0, the lowest average return is for Coal at `r format(min(colMeans(returns[,2:50])),digits=3)`, and the highest is for Gold at `r format(max(colMeans(returns[,2:50])),digits=3)`, with variance ranging from 
+`r format(min(apply(returns[,2:50], 2, var)),digits=3)` for Household, and `r format(max(apply(returns[,2:50], 2, var)),digits=3)` for Coal.
+
+To use this for prediction we are looking for a relationship between industry returns and either contemporaneous or lagged returns in the same industry, and in other industries. To take a naive initial look at whether this type of pattern is found in the data, we inspect the correlations between the variables and their 1st and 2nd lags.
+
+```{r}
+##create correlation matrix
+corrmatrix <- round(cor(returns[,2:50]), 2)
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "Contemporaneous Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-1,1), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[2:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-1),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-1") +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[3:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-2),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "Twice Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-2") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[4:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-3),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "3-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-3") +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[5:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-4),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "4-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-4") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[6:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-5),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "5-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-5") +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[7:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-6),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "6-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-6") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[8:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-7),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "7-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-7") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[9:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-8),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "8-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-8") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+
+Visual Check that the variables seem to be correlated:
+
+```{r}
+meltedreturns$actualdate <- as.Date(as.character(meltedreturns$date), '%Y%m%d')
+meltedreturns.agrifood <- meltedreturns[meltedreturns$variable  %in% c("Agric","Beer "),]
+ggplot(meltedreturns.agrifood, aes(x=actualdate, y=value, col=variable)) + geom_line() + theme_bw() + theme( axis.text.x = element_text(angle = 90, vjust=0.5)) + ylab("Daily Returns")
+```
+
+
+```{r}
+meltedreturns$actualdate <- as.Date(as.character(meltedreturns$date), '%Y%m%d')
+meltedreturns.agrifood <- meltedreturns[meltedreturns$variable  %in% c("Oil  ","ElcEq"),]
+ggplot(meltedreturns.agrifood, aes(x=actualdate, y=value, col=variable)) + geom_line() + theme_bw() + theme( axis.text.x = element_text(angle = 90, vjust=0.5)) + ylab("Daily Returns")
+```
+
+Possible explanation is that these are "business cycle" trends so all seem to be correlated contemporaneously.
+
+```{r}
+##create correlation matrix
+for (i in 1:49){
+  for (j in 1:49){
+#correlating the current value of i, with the lagged value of j
+#starting from second period so that lagged values can be calculated
+#the +1 is to avoid the date column
+    corrmatrix[i,j] <- round(cor(returns[13:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-12),j+1]), 2)
+  }
+}
+
+melteddf<- melt(corrmatrix)
+
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "12-Lagged Correlation Matrix") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-12") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+
+Check for autocorrelation within time series
+```{r eval=FALSE}
+Agricts <- ts(returns[,2], start=c(1,20), frequency=252)
+Foodts <- ts(returns[,3], start=c(1,20), frequency=252)
+Sodats <- ts(returns[,4], start=c(1,20), frequency=252)
+Beerts <- ts(returns[,5], start=c(1,20), frequency=252)
+Goldts <- ts(returns[,28], start=c(1,20), frequency=252)
+
+fit = stl(Agricts, s.window='periodic')
+plot(fit)
+#season plot showing no clear seasonality
+ggseasonplot(Agricts, year.labels=TRUE, year.labels.left=TRUE)
+#lag plot showing no clear lag correlation
+gglagplot(Agricts)
+##ACF showing that effect on shocks seems to reduce, and that there are some lags that seem significant 
+ggAcf(Agricts) + theme_bw() + theme(panel.grid.minor=element_blank()) + scale_x_continuous(breaks=c(2,21,40,42,75,77,252))
+ggAcf(Foodts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks=c(4,5,15,28,49,53,252))
+ggAcf(Sodats) + theme_bw() + theme(panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks=c(86,166))
+ggAcf(Beerts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks=c(90))
+ggAcf(Goldts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
+  scale_x_continuous(breaks=c(7,14,48,64,78,252,264))
+#no evidence of AC for lag =1
+Box.test(Agricts, lag=1)
+#some for lag=2
+Box.test(Agricts, lag=2)
+#some for lag=3
+Box.test(Agricts, lag=3)
+#none for lag=4
+Box.test(Agricts, lag=4)
+#none for lag=5
+Box.test(Agricts, lag=5)
+```
+
+#Tests for Auto-correlation with lagged same-industry variables.
+
+Using a Box-Pierce test each variable was tested for autocorrelation with lags up to 10 working days. The results displayed below show whether each of these are statistically significant at the 10% level, indicating that there is evidence of autocorrelation.
+
+```{r cache=FALSE}
+boxpiercevalue <- matrix(0, nrow = 49, ncol = 10) 
+for (i in 1:49){
+  for (j in 1:10){
+    boxpiercevalue[i,j] <- round(Box.test(ts(returns[,i+1],
+                                       start=c(1,20),
+                                       frequency=252), lag=j)$p.value,3)
+  }
+}
+
+boxpiercevaluedf <- as.data.frame(boxpiercevalue)
+boxpiercevaluedf <- cbind(names(returns)[2:50],boxpiercevaluedf)
+names(boxpiercevaluedf) <- c("Industry","Lag 1","Lag 2","Lag 3",
+                        "Lag 4","Lag 5","Lag 6","Lag 7",
+                        "Lag 8","Lag 9","Lag 10")
+
+pval <- 0.1
+condtable <- condformat(boxpiercevaluedf)
+condtable <- condtable + rule_fill_discrete(2,
+                     expression = boxpiercevaluedf[,2] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(3,
+                     expression = boxpiercevaluedf[,3] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(4,
+                     expression = boxpiercevaluedf[,4] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(5,
+                     expression = boxpiercevaluedf[,5] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(6,
+                     expression = boxpiercevaluedf[,6] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(7,
+                     expression = boxpiercevaluedf[,7] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(8,
+                     expression = boxpiercevaluedf[,8] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(9,
+                     expression = boxpiercevaluedf[,9] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(10,
+                     expression = boxpiercevaluedf[,10] < pval,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(11,
+                     expression =  boxpiercevaluedf[,11] < pval,
+                     colours = c("TRUE" = "#c2f0c2"))
+condtable
+```
+
+#Model Building
+
+```{r eval=FALSE, results="hide"}
+df <- returns
+#when adding in lags need to take away the last row bc it doesn't have a y
+windowlength <- 80
+
+predictions <- matrix(0, ncol = 3, nrow = (nrow(df)+1))
+linearcoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+lassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+
+#windows run from the start of the window to the last full record
+for (tau in windowlength:nrow(df)) {
+        train.target <- df[2:tau,2]
+        train.predictors <- df[1:(tau-1), 3:ncol(df)]
+        train.full <- cbind(train.target,train.predictors)
+        
+        #find historical mean value
+        predictions[tau+1,1] <- mean(train.target)
+
+        #find linear model prediction
+        temp.mdl.linear <- lm(train.target ~ ., data=train.full)
+        predictions[tau+1,2] <- predict(temp.mdl.linear,
+                                        newdata= df[tau,3:ncol(df)])
+        linearcoefs[tau+1,] <- coef(temp.mdl.linear)
+        
+        #find cv with provided vals lasso prediction
+        temp.mdl.lasso.mancv <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1, nfolds=5,
+                               lambda = c(0.01,0.025,0.05))
+        predictions[tau+1,3] <- predict(temp.mdl.lasso.mancv, newx = as.matrix(df[tau,3:ncol(df)]),
+                                    type = "response")
+        lassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso.mancv))
+
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,2)*100,"%",sep=""))
+}
+```
+
+## References
+
+
+https://www.treasury.gov/resource-center/data-chart-center/interest-rates/Pages/TextView.aspx?data=billRatesYear&year=2015
+
+```{r eval=FALSE}
+oldlassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+manlassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
+
+        #find CV lasso model prediction
+        temp.mdl.lasso <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1, nfolds=5)
+        predictions[tau+1,3] <- predict(temp.mdl.lasso,
+                                        newx= as.matrix(df[tau,3:ncol(df)]))
+        oldlassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso))
+        
+        #find manual lasso model prediction
+        temp.mdl.lasso.man <- glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1)
+        predictions[tau+1,4] <- predict(temp.mdl.lasso.man, newx = as.matrix(df[tau,3:ncol(df)]),
+                                    type = "response",
+                                    s = 0.03)
+        manlassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso.man, s=0.03))
+```
+
