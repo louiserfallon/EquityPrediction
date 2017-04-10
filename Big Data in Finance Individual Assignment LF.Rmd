@@ -10,13 +10,21 @@ library(ggplot2) #for ggplot
 library(forecast) #for ggseasonplot and autoplot etc
 library(reshape2) #for melt
 library(condformat) #for condformat and rule_fill_discrete
-library(glmnet)
+library(glmnet) #for cv.glmnet (LASSO and elastic nets)
+library(randomForest) #for randomForest
+library(gbm) #for gbm
+library(knitr) #for kable
+library(gridExtra) #for gridarrange
+#library(vars) #for var
 knitr::opts_chunk$set(cache = TRUE, echo=FALSE)
 ```
 
-## Data
 
-```{r}
+## Introduction
+
+Using daily data on value-weighted returns from 49 industry-based portfolios, multiple algorithms are trained and compared to predict future returns for each industry.
+
+```{r fig.height=3.5, fig.align='center'}
 #load data
 returns <- as.data.frame(read_excel("Data.xlsx", sheet = 1, col_names = TRUE, skip=3))
 #remove row of NAs at the bottom
@@ -25,24 +33,51 @@ returns <- returns[complete.cases(returns),]
 names(returns)[1] <- "date"
 #plot boxplot of returns
 meltedreturns <- melt(returns, id.vars = "date")
-ggplot(meltedreturns, aes(x=variable, y=value)) + geom_boxplot(col="#000066") + theme_bw() + theme(legend.position="none", axis.text.x = element_text(angle = 90, vjust=0.5)) + xlab("Industry") + ylab("Daily Returns")
+ggplot(meltedreturns, aes(x=variable, y=value)) +
+  geom_boxplot(col="#000066") + 
+  theme_bw() + 
+  theme(legend.position="none",
+        axis.text.x = element_text(angle = 90, vjust=0.5, size=6)) +
+  xlab("Industry") + ylab("Daily Returns")
 ```
 
-Industry returns are generally centered around 0, the lowest average return is for Coal at `r format(min(colMeans(returns[,2:50])),digits=3)`, and the highest is for Gold at `r format(max(colMeans(returns[,2:50])),digits=3)`, with variance ranging from 
+The daily Industry returns are generally centered around 0, the lowest average return is for Coal at `r format(min(colMeans(returns[,2:50])),digits=3)`, and the highest is for Gold at `r format(max(colMeans(returns[,2:50])),digits=3)`, with clear differences in industry return variance ranging from 
 `r format(min(apply(returns[,2:50], 2, var)),digits=3)` for Household, and `r format(max(apply(returns[,2:50], 2, var)),digits=3)` for Coal.
 
-To use this for prediction we are looking for a relationship between industry returns and either contemporaneous or lagged returns in the same industry, and in other industries. If industry momentum is a real phenomenon, then we would expect to see a correlation between current returns with previous returns, within an industry
+To use this for prediction we require a relationship between industry returns and lagged returns either in the same industry, or across other industries. If industry momentum is a real phenomenon, as per (Grinblatt and Moskowitz 1999) then we would expect to see a correlation between current returns with previous returns, within an industry.
 
-To take a naive initial look at whether this type of pattern is found in the data, we inspect the correlations between the variables and their 1st and 2nd lags.
+We would expect to see positive cross-correlations in occasions where there is an upstream/downstream industry relationship e.g. with Textiles and Clothes, where information is gradually diffused (Menzly and Obas 2010), where there are differences in analyst coverage (Brennan, Jegadeesh and Swaminathan 1993) such that industries with high levels of average coverage "lead" industies with lower levels. 
+
+The below table outlines the expected optimal investment strategies given the autocovariance/cross covariance structure, as per (DeMiguel et al 2014) and (Lo and MacKinlay 1990).
 
 ```{r}
-##create correlation matrix
+expectedstrategies <- data.frame(
+                      portfoliostrategy=c("contrarian","momentum","VAR"),
+                      autocovariances=c("-","+","any"),
+                      crosscovariances=c("+","-","any"))
+kable(expectedstrategies, align=c("c","c","c"))
+```
+
+*paraphrase this*: A broad variety of explanations have been offered for cross-covariances and autocovariances of asset returns.
+Some of these explanations are based on time-varying expected returns (Conrad and Kaul 1988), with more recent
+work showing how to generate this variation in rational models (Berk, Green, and Naik 1999; Johnson 2002).
+Other explanations rely on economic links, such as those among suppliers and customers (Cohen and Frazzini
+2008) and among upstream and downstream industries (Menzly and Ozbas 2010). Then there are explanations
+that are based on the slow transmission of information across investors (Hong and Stein 1999). Finally, there
+are behavioral models of underreaction and overreaction, such as the ones by De Long et al. (1990), Daniel,
+Hirshleifer, and Subrahmanyam (1998), and Barberis, Shleifer, and Vishny (1998).
+
+#Cross-correlation
+
+To take a naive initial look at whether this type of pattern is found in the data, we inspect the correlations between variables contemporaneously, and then with their lags.
+
+```{r fig.height=3.7, fig.width=5, fig.align='center'}
+##create correlation matrix for lag 0
 corrmatrix <- round(cor(returns[,2:50]), 2)
 melteddf<- melt(corrmatrix)
-
 ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "Contemporaneous Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t") +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
           axis.text.y = element_text(size=6),
@@ -51,11 +86,13 @@ ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) +
           panel.border = element_blank()) + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-1,1), space = "Lab",
-                       name="Pearson\nCorrelation") 
+                       name="Pearson\nCorrelation")
+
 ```
 
-```{r}
-##create correlation matrix
+
+```{r fig.height=3}
+##create correlation matrix for lag 1
 for (i in 1:49){
   for (j in 1:49){
 #correlating the current value of i, with the lagged value of j
@@ -65,25 +102,21 @@ for (i in 1:49){
                                  returns[1:(nrow(returns)-1),j+1]), 2)
   }
 }
-
 melteddf<- melt(corrmatrix)
-
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+lag1 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-1") +
-     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+     theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
-```
-
-```{r}
-##create correlation matrix
+##create correlation matrix for lag 2
 for (i in 1:49){
   for (j in 1:49){
 #correlating the current value of i, with the lagged value of j
@@ -96,27 +129,22 @@ for (i in 1:49){
 
 melteddf<- melt(corrmatrix)
 
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+lag2 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "Twice Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-2") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
-```
-
-```{r}
-##create correlation matrix
+##create correlation matrix for lag 3
 for (i in 1:49){
   for (j in 1:49){
-#correlating the current value of i, with the lagged value of j
-#starting from second period so that lagged values can be calculated
-#the +1 is to avoid the date column
     corrmatrix[i,j] <- round(cor(returns[4:nrow(returns),i+1],
                                  returns[1:(nrow(returns)-3),j+1]), 2)
   }
@@ -124,51 +152,48 @@ for (i in 1:49){
 
 melteddf<- melt(corrmatrix)
 
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+lag3 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "3-Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-3") +
-     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+     theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
-```
 
-```{r}
-##create correlation matrix
+corrtest <- matrix (0, nrow=49, ncol=49)
+##create correlation matrix for lag 4
 for (i in 1:49){
   for (j in 1:49){
-#correlating the current value of i, with the lagged value of j
-#starting from second period so that lagged values can be calculated
-#the +1 is to avoid the date column
     corrmatrix[i,j] <- round(cor(returns[5:nrow(returns),i+1],
                                  returns[1:(nrow(returns)-4),j+1]), 2)
+    corrtest[i,j] <- cor.test(returns[7:nrow(returns),i+1],
+                                 returns[1:(nrow(returns)-6),j+1])$p.value
   }
 }
 
 melteddf<- melt(corrmatrix)
 
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+lag4 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "4-Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-4") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
-```
 
-
-```{r}
-##create correlation matrix
+##create correlation matrix for lag 5
 for (i in 1:49){
   for (j in 1:49){
 #correlating the current value of i, with the lagged value of j
@@ -178,26 +203,23 @@ for (i in 1:49){
                                  returns[1:(nrow(returns)-5),j+1]), 2)
   }
 }
-
 melteddf<- melt(corrmatrix)
 
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+lag5 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "5-Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-5") +
-     theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+     theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
-```
 
-
-```{r}
-##create correlation matrix
+##create correlation matrix for lag 6
 for (i in 1:49){
   for (j in 1:49){
 #correlating the current value of i, with the lagged value of j
@@ -208,222 +230,106 @@ for (i in 1:49){
   }
 }
 
-melteddf<- melt(corrmatrix)
 
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+melteddf<- melt(corrmatrix)
+lag6 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
     geom_tile() + 
-    labs(x = "", y = "", title = "6-Lagged Correlation Matrix") +
+    labs(x = "", y = "", title = "") +
     theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-6") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
+     theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
           axis.ticks.x = element_blank(),
           axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
+          panel.border = element_blank(),
+          legend.position = 'none') + 
   scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
 ```
+From the above we can see that in almost all cases the contemporanous correlations are positive, which is generally showing that the overall market moves in similar directions, potentially according to business cycle trends. The only clear anomaly here is Gold, which has much lower correlation, and in some cases a slighty negative correlation against Clothes and Banks, which is likely due to the fact that gold is often an "insurance" investment [REFERENCE]. This information is not particularly useful for the predictive task at hand, as prediction will be made for a time period in the future, when returns of other industries in that future time period will not be known.
+
+The below identifies the correlations between the industry returns at time t, against their returns at various lags, at lags of 2 and 4 there is a clear pattern of negative cross correlations, except for some outlier industries (these include Gold, Coal, Oil and interestingly for lag 4 also Fun). This negative cross-correlation is not in line with the results from (Lo and MacKinlay 1990), which may be because they use weekly data rather than daily data. The effect we could be seeing here is a "balancing" effect where short-term investors, or automatic traders potentially following a momentum strategy move money out of poorly performing industries and reinvest that money in other industries within a time frame of 2 or 4 days, pushing up the price and vice versa.
+
+Regardless of the sign, if these correlations are significant then they are expected to be useful within the predictive models, which for lag=4, `r length(corrtest[corrtest<0.1])` are at the 10% significance level, and `r length(corrtest[corrtest<0.05])` are at the 5% significance level. Although this is a small percentage of the `r 49*49` possible combinations, algorithms that deal with scarcity can use these to aid prediction e.g. the LASSO method (Chinco, Clark-Joseph and Ye 2017). What is not clear from these correlation plots is a clear pattern along the diagonal, implying auto-correlation in either direction may not be strong, this is tested further in the next section.
 
 ```{r}
-##create correlation matrix
-for (i in 1:49){
-  for (j in 1:49){
-#correlating the current value of i, with the lagged value of j
-#starting from second period so that lagged values can be calculated
-#the +1 is to avoid the date column
-    corrmatrix[i,j] <- round(cor(returns[8:nrow(returns),i+1],
-                                 returns[1:(nrow(returns)-7),j+1]), 2)
-  }
-}
-
-melteddf<- melt(corrmatrix)
-
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
-    geom_tile() + 
-    labs(x = "", y = "", title = "7-Lagged Correlation Matrix") +
-    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-7") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
-          axis.ticks.x = element_blank(),
-          axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
-  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
-                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
-                       name="Pearson\nCorrelation") 
-```
-
-```{r}
-##create correlation matrix
-for (i in 1:49){
-  for (j in 1:49){
-#correlating the current value of i, with the lagged value of j
-#starting from second period so that lagged values can be calculated
-#the +1 is to avoid the date column
-    corrmatrix[i,j] <- round(cor(returns[9:nrow(returns),i+1],
-                                 returns[1:(nrow(returns)-8),j+1]), 2)
-  }
-}
-
-melteddf<- melt(corrmatrix)
-
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
-    geom_tile() + 
-    labs(x = "", y = "", title = "8-Lagged Correlation Matrix") +
-    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-8") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
-          axis.ticks.x = element_blank(),
-          axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
-  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
-                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
-                       name="Pearson\nCorrelation") 
+grid.arrange(lag1,lag2,lag3,lag4,lag5,lag6, nrow=2)
 ```
 
 
-Visual Check that the variables seem to be correlated:
 
-```{r}
-meltedreturns$actualdate <- as.Date(as.character(meltedreturns$date), '%Y%m%d')
-meltedreturns.agrifood <- meltedreturns[meltedreturns$variable  %in% c("Agric","Beer "),]
-ggplot(meltedreturns.agrifood, aes(x=actualdate, y=value, col=variable)) + geom_line() + theme_bw() + theme( axis.text.x = element_text(angle = 90, vjust=0.5)) + ylab("Daily Returns")
-```
+#Auto-correlation
 
-
-```{r}
-meltedreturns$actualdate <- as.Date(as.character(meltedreturns$date), '%Y%m%d')
-meltedreturns.agrifood <- meltedreturns[meltedreturns$variable  %in% c("Oil  ","ElcEq"),]
-ggplot(meltedreturns.agrifood, aes(x=actualdate, y=value, col=variable)) + geom_line() + theme_bw() + theme( axis.text.x = element_text(angle = 90, vjust=0.5)) + ylab("Daily Returns")
-```
-
-Possible explanation is that these are "business cycle" trends so all seem to be correlated contemporaneously.
-
-```{r}
-##create correlation matrix
-for (i in 1:49){
-  for (j in 1:49){
-#correlating the current value of i, with the lagged value of j
-#starting from second period so that lagged values can be calculated
-#the +1 is to avoid the date column
-    corrmatrix[i,j] <- round(cor(returns[13:nrow(returns),i+1],
-                                 returns[1:(nrow(returns)-12),j+1]), 2)
-  }
-}
-
-melteddf<- melt(corrmatrix)
-
-ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
-    geom_tile() + 
-    labs(x = "", y = "", title = "12-Lagged Correlation Matrix") +
-    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at time t-12") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=6),
-          axis.text.y = element_text(size=6),
-          axis.ticks.x = element_blank(),
-          axis.ticks.y = element_blank(),
-          panel.border = element_blank()) + 
-  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
-                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
-                       name="Pearson\nCorrelation") 
-```
-
-
-Check for autocorrelation within time series
-```{r eval=FALSE}
-Agricts <- ts(returns[,2], start=c(1,20), frequency=252)
-Foodts <- ts(returns[,3], start=c(1,20), frequency=252)
-Sodats <- ts(returns[,4], start=c(1,20), frequency=252)
-Beerts <- ts(returns[,5], start=c(1,20), frequency=252)
-Goldts <- ts(returns[,28], start=c(1,20), frequency=252)
-
-fit = stl(Agricts, s.window='periodic')
-plot(fit)
-#season plot showing no clear seasonality
-ggseasonplot(Agricts, year.labels=TRUE, year.labels.left=TRUE)
-#lag plot showing no clear lag correlation
-gglagplot(Agricts)
-##ACF showing that effect on shocks seems to reduce, and that there are some lags that seem significant 
-ggAcf(Agricts) + theme_bw() + theme(panel.grid.minor=element_blank()) + scale_x_continuous(breaks=c(2,21,40,42,75,77,252))
-ggAcf(Foodts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
-  scale_x_continuous(breaks=c(4,5,15,28,49,53,252))
-ggAcf(Sodats) + theme_bw() + theme(panel.grid.minor=element_blank()) +
-  scale_x_continuous(breaks=c(86,166))
-ggAcf(Beerts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
-  scale_x_continuous(breaks=c(90))
-ggAcf(Goldts) + theme_bw() + theme(panel.grid.minor=element_blank()) +
-  scale_x_continuous(breaks=c(7,14,48,64,78,252,264))
-#no evidence of AC for lag =1
-Box.test(Agricts, lag=1)
-#some for lag=2
-Box.test(Agricts, lag=2)
-#some for lag=3
-Box.test(Agricts, lag=3)
-#none for lag=4
-Box.test(Agricts, lag=4)
-#none for lag=5
-Box.test(Agricts, lag=5)
-```
-
-#Tests for Auto-correlation with lagged same-industry variables.
-
-Using a Box-Pierce test each variable was tested for autocorrelation with lags up to 10 working days. The results displayed below show whether each of these are statistically significant at the 10% level, indicating that there is evidence of autocorrelation.
+Using a Box-Pierce test each industry return series was tested for autocorrelation with lags up to 10 working days. The results displayed below show the correlation between the returns at time t and returns at time t-lag, and are highlighted in bold when the Box-Pierce test implies that these are statistically significant at the 10% level, providing that there is evidence of autocorrelation. This shows that in most cases there is no statistically significant autocorrelation for an industry portfolio, but in cases where there is autocorrelation, this is often negative (in fact, for lags up to 4 all significant autocorrelations are negative except for Steel).
 
 ```{r cache=FALSE}
 boxpiercevalue <- matrix(0, nrow = 49, ncol = 10) 
+autocorrelations <- matrix(0, nrow = 49, ncol = 10) 
 for (i in 1:49){
   for (j in 1:10){
     boxpiercevalue[i,j] <- round(Box.test(ts(returns[,i+1],
                                        start=c(1,20),
                                        frequency=252), lag=j)$p.value,3)
+    autocorrelations[i,j] <- round(cor(returns[(1+j):nrow(returns),i+1],
+                                       returns[1:(nrow(returns)-j),i+1]),3)
   }
 }
 
-boxpiercevaluedf <- as.data.frame(boxpiercevalue)
-boxpiercevaluedf <- cbind(names(returns)[2:50],boxpiercevaluedf)
-names(boxpiercevaluedf) <- c("Industry","Lag 1","Lag 2","Lag 3",
+autocorrelationsdf <- as.data.frame(autocorrelations)
+autocorrelationsdf <- cbind(names(returns)[2:50],autocorrelationsdf)
+names(autocorrelationsdf) <- c("Industry","Lag 1","Lag 2","Lag 3",
                         "Lag 4","Lag 5","Lag 6","Lag 7",
                         "Lag 8","Lag 9","Lag 10")
 
+
 pval <- 0.1
-condtable <- condformat(boxpiercevaluedf)
-condtable <- condtable + rule_fill_discrete(2,
-                     expression = boxpiercevaluedf[,2] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
-                      rule_fill_discrete(3,
-                     expression = boxpiercevaluedf[,3] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+condtable <- condformat(autocorrelationsdf) + 
+                     rule_fill_discrete(2,
+                     expression =  boxpiercevalue[,1] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
+                     rule_fill_discrete(3,
+                     expression = boxpiercevalue[,2] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(4,
-                     expression = boxpiercevaluedf[,4] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,3] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(5,
-                     expression = boxpiercevaluedf[,5] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,4] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(6,
-                     expression = boxpiercevaluedf[,6] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,5] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(7,
-                     expression = boxpiercevaluedf[,7] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,6] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(8,
-                     expression = boxpiercevaluedf[,8] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,7] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(9,
-                     expression = boxpiercevaluedf[,9] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,8] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(10,
-                     expression = boxpiercevaluedf[,10] < pval,
-                     colours = c("TRUE" = "#c2f0c2")) +
+                     expression = boxpiercevalue[,9] < pval,
+                     colours = c("TRUE" = "#dddddd")) +
                       rule_fill_discrete(11,
-                     expression =  boxpiercevaluedf[,11] < pval,
-                     colours = c("TRUE" = "#c2f0c2"))
+                     expression = boxpiercevalue[,10] < pval,
+                     colours = c("TRUE" = "#dddddd"))
 condtable
 ```
 
+
 #Model Building
+
+Models were built to predict at time $\tau$, using data known at time $\tau$, the value of industry returns at time $\tau + 1$, using a rolling training window of 80 days ($\tau-80 to \tau-1$), to identify out of sample performance as per the model of (Goyal and Welch 2008).
+Many predictive models were built, with a lag structure of 0, 1, 2 and 3, where appropriate (linear models at $lag \geq 2$ were underidentified at a window of 80, as there are too many predictors). The results of these models are outlined below:
+
 ```{r}
+windowlength <- 80
+```
+
+```{r eval=FALSE}
 #no-lag-setup
 df <- returns
-#when adding in lags need to take away the last row bc it doesn't have a y
-windowlength <- 80
 
 historicalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 linearpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
@@ -475,37 +381,43 @@ for (tau in windowlength:nrow(df)) {
 ##because this code takes a while to run, print for progress
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
+save(historicalmeanpredictions,
+     linearpredictions,
+     lassopredictions,
+     file="lag0predictions.RData")
 ```
 
-```{r}
-#3-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
+```{r eval=FALSE}
+#4-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
 lag.0 <- returns[4:nrow(returns),] 
+for (i in 1:ncol(lag.0)) colnames(lag.0)[i] <- gsub(" ","",colnames(lag.0)[i])
 lag.1 <- returns[3:(nrow(returns)-1),2:ncol(returns)]
-for (i in 1:ncol(lag.1)) colnames(lag.1)[i] <- paste(colnames(lag.1)[i],"_lag_1",sep="")
+for (i in 1:ncol(lag.1)) colnames(lag.1)[i] <- gsub(" ","", paste(colnames(lag.1)[i],"_lag_1",sep="")) 
 lag.2 <- returns[2:(nrow(returns)-2),2:ncol(returns)]
-for (i in 1:ncol(lag.2)) colnames(lag.2)[i] <- paste(colnames(lag.2)[i],"_lag_2",sep="")
+for (i in 1:ncol(lag.2)) colnames(lag.2)[i] <- gsub(" ","", paste(colnames(lag.2)[i],"_lag_2",sep=""))
 lag.3 <- returns[1:(nrow(returns)-3),2:ncol(returns)]
-for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- paste(colnames(lag.3)[i],"_lag_3",sep="")
+for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- gsub(" ","", paste(colnames(lag.3)[i],"_lag_3",sep=""))
 df <- cbind(lag.0,lag.1,lag.2,lag.3)
   
-#when adding in lags need to take away the last row bc it doesn't have a y
-windowlength <- 80
-
-laghistoricalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-laglinearpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-laglassopredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laghistoricalmeanpredictions4 <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laglassopredictionscv <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+lagrfpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laggbmpredictionsgauss <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laggbmpredictionslaplace <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 
 laglinearcoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
 laglassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
+laglassocoefscv <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
 ```
 
 ```{r eval=FALSE, results="hide"}
+#4-LAGGED LASSO AND RF MODEL
 #windows run from the start of the window to the last full record
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
         
         #creating target, train and prediction data
-        #for window at tau, for industry j
+        #for window at (tau+lag), for industry j
         
         #take j values for time 2 onwards
         train.target <- df[(tau-windowlength+2):tau,j+1]
@@ -520,30 +432,59 @@ for (tau in windowlength:nrow(df)) {
         tau.newdata <- df[tau, (2:ncol(df))[2:ncol(df) != (j+1)]]
         
         #find historical mean value
-        laghistoricalmeanpredictions[tau+1,j] <- mean(train.target)
+        laghistoricalmeanpredictions4[tau+1,j] <- mean(train.target)
 
-        #find linear model prediction
-        temp.mdl.linear <- lm(train.target ~ ., data=train.full)
-        laglinearpredictions[tau+1,j] <- predict(temp.mdl.linear,
-                                        newdata= tau.newdata)
-        laglinearcoefs[tau+1,] <- coef(temp.mdl.linear)
-        
-        #find cv with provided vals lasso prediction
-        temp.mdl.lasso.mancv <- cv.glmnet(as.matrix(train.predictors),
+        #find cv with any vals lasso prediction
+        temp.mdl.lasso.cv <- cv.glmnet(as.matrix(train.predictors),
                                as.matrix(train.target),
-                               alpha = 1, nfolds=5,
-                               lambda = c(0.01,0.025,0.05))
-        laglassopredictions[tau+1,j] <- predict(temp.mdl.lasso.mancv,
+                               alpha = 1, nfolds=5)
+        laglassopredictionscv[tau+1,j] <- predict(temp.mdl.lasso.cv,
                                         newx = as.matrix(tau.newdata),
                                     type = "response")
-        laglassocoefs[tau+1,] <- as.vector(coef(temp.mdl.lasso.mancv))
+        laglassocoefscv[tau+1,] <- as.vector(coef(temp.mdl.lasso.cv))
+        
+        #find random forest
+        temp.mdl.randomforest <- randomForest(train.target ~ .,
+                                              data=train.full,
+                                              ntree=50,
+                                              nodesize=2)
+        lagrfpredictions[tau+1,j] <- predict(temp.mdl.randomforest, tau.newdata)
+        
+        #find general boosting
+        temp.mdl.gbm.gaus <- gbm(train.target ~ .,
+                            data=train.full,
+                            distribution="gaussian",
+                            n.trees=50,
+                            n.cores=1)
+        laggbmpredictionsgauss[tau+1,j] <- predict(temp.mdl.gbm.gaus,
+                                              newdata=tau.newdata,
+                                              n.trees=20,
+                                              n.cores=1)
+        #find laplace boosting
+        temp.mdl.gbm.laplace <- gbm(train.target ~ .,
+                            data=train.full,
+                            distribution="laplace",
+                            n.trees=50)
+        laggbmpredictionslaplace[tau+1,j] <- predict(temp.mdl.gbm.laplace,
+                                              newdata=tau.newdata,
+                                              n.trees=20)
+ 
+
 }
 ##because this code takes a while to run, print for progress
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
+save(laghistoricalmeanpredictions4,
+     laglassopredictionscv,
+     lagrfpredictions,
+     laggbmpredictionsgauss,
+     laggbmpredictionslaplace,
+     file="lag4predictions.RData")
 ```
 
 ```{r}
+load("lag0predictions.RData")
+load("lag4predictions.RData")
 #Out of Sample Accuracy
 actualsdf <- returns[(windowlength+1):(nrow(returns)),2:ncol(returns)]
 
@@ -559,13 +500,64 @@ lasso.clean <- as.data.frame(lassopredictions)[(windowlength+1):(nrow(lassopredi
 lassoSE <- (lasso.clean - actualsdf)^2
 lassoSSE <- colSums(lassoSE)
 
-R2oos <- data.frame(linear = round(1-(linearSSE/historicalmeanSSE),3),
-                    lasso =  round(1-(lassoSSE/historicalmeanSSE),3))
-R2oos
+lagactuals4 <- returns[(windowlength+4):(nrow(returns)),2:ncol(returns)]
+
+laghistoricalmeanpredictions4.clean <- as.data.frame(laghistoricalmeanpredictions4)[(windowlength+1):(nrow(laghistoricalmeanpredictions4)-1),]
+laghistoricalmean4SE <- (laghistoricalmeanpredictions4.clean - lagactuals4)^2
+laghistoricalmean4SSE <- colSums(laghistoricalmean4SE)
+
+laglassocv4.clean <-  as.data.frame(laglassopredictionscv)[(windowlength+1):(nrow(laglassopredictionscv)-1),]
+laglassocv4SE <- (laglassocv4.clean - lagactuals4)^2
+laglassocv4SSE <- colSums(laglassocv4SE)
+
+lagrfpredictions.clean <-  as.data.frame(lagrfpredictions)[(windowlength+1):(nrow(lagrfpredictions)-1),]
+lagrf4SE <- (lagrfpredictions.clean - lagactuals4)^2
+lagrf4SSE <- colSums(lagrf4SE)
+ 
+laggbmpredictionsgauss.clean <-  as.data.frame(laggbmpredictionsgauss)[(windowlength+1):(nrow(laggbmpredictionsgauss)-1),]
+laggbmg4SE <- (laggbmpredictionsgauss.clean - lagactuals4)^2
+laggbmg4SSE <- colSums(laggbmg4SE)
+
+laggbmpredictionslaplace.clean <-  as.data.frame(laggbmpredictionslaplace)[(windowlength+1):(nrow(laggbmpredictionslaplace)-1),]
+laggbml4SE <- (laggbmpredictionslaplace.clean - lagactuals4)^2
+laggbml4SSE <- colSums(laggbml4SE)
 ```
 
 ```{r}
-#For Goyel plots
+R2oos <- data.frame(
+                    linear = round(1-(linearSSE/historicalmeanSSE),4),
+                    lasso =  round(1-(lassoSSE/historicalmeanSSE),4),
+                    laglasso4cv = round(1-(laglassocv4SSE/laghistoricalmean4SSE),4),
+                    lagrf4 = round(1-(lagrf4SSE/laghistoricalmean4SSE),4),
+                    laggbmgauss4 = round(1-(laggbmg4SSE/laghistoricalmean4SSE),4),
+                    laggbmlaplace4 = round(1-(laggbml4SSE/laghistoricalmean4SSE),4)
+                    )
+
+R2oos <- cbind(names(returns)[2:50],R2oos)
+colnames(R2oos)[1] <- "Industry"
+condr2table <- condformat(R2oos) + rule_fill_discrete(2,
+                     expression = R2oos[,2] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(3,
+                     expression = R2oos[,3] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+                      rule_fill_discrete(4,
+                     expression = R2oos[,4] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) + 
+                     rule_fill_discrete(5,
+                     expression = R2oos[,5] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) + 
+                     rule_fill_discrete(6,
+                     expression = R2oos[,6] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) + 
+                     rule_fill_discrete(7,
+                     expression = R2oos[,7] > 0,
+                     colours = c("TRUE" = "#c2f0c2"))
+condr2table
+```
+
+```{r}
+#For Goyal plots
 
 #function to get cumulative sums of a dataframe
 colCumSums <- function(x) {
@@ -575,8 +567,38 @@ colCumSums <- function(x) {
 ```
 
 
-
 ## References
+
+Campbell, J., Thompson,S. (2008) Predicting Excess Stock Returns Out of Sample: Can anything Beat the Historical Average? *Review of Financial Studies* 21, 1509-1531.
+
+Chinco, A., Clark-Joseph, A., and M. Ye, (2017) Sparse Signals in the Cross-Section of Returns, Working paper. Accessible at: http://www.alexchinco.com/sparse-signals-in-cross-section.pdf [Accessed 10th April 2017]
+
+DeMiguel, V., Nogales F. J, Uppal, R. (2014) Stock Return Serial Dependence and
+Out-of-Sample Portfolio Performance, *Review of Financial Studies* 27 (4), 1031–
+1073.
+
+Goyal, A., Welch, I. (2007) A Comprehensive Look at the Empirical Performance of Equity Premium Prediction. *Review of Financial Studies, Oxford University Press for Society for Financial Studies* 21(4), 1455-1508. 
+
+Lo, A., MacKinlay A. C. (1990) When are contrarian profits due to stock market overreaction? *Review of Financial Studies* 3(2), 175–205.
+
+Moskowitz, T., Grinblatt M (1999) Do Industries Explain Momentum? *The Journal of Finance* 54 (4), 1249-1290. 
+
+Menzly, L., Ozbas O. (2010) Market segmentation and cross-predictability of returns. *Journal of Finance* 65, 1555–80.
+
+It is well known that momentum is not the same as positive autocorrelation: momentum is a cross-sectional result (winners beat losers), while autocorrelation is a time-series phenomenon (a stock's past and future returns are correlated).
+http://finance.martinsewell.com/stylized-facts/dependence/Lewellen2002.pdf
+Negative x correlation month -> year.
+
+
+
+Journal of Statistical Software
+October 2006, Volume 17, Issue 2. http://www.jstatsoft.org/
+
+News Implied Volatility and Disaster Concerns http://faculty.som.yale.edu/alanmoreira/Papers/NVIX.pdf
+
+Stock Return Serial Dependence and
+Out-of-Sample Portfolio Performance http://faculty.london.edu/avmiguel/DNU-RFS.pdf
+
 https://www.treasury.gov/resource-center/data-chart-center/interest-rates/Pages/TextView.aspx?data=billRatesYear&year=2015
 
 ```{r eval=FALSE}
