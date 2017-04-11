@@ -432,7 +432,7 @@ laglassopredictions.ma <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 laglassocoefs.ma <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
 ```
 
-```{r}
+```{r melagplot, eval=FALSE}
 lag.5.ma.df <- as.data.frame(lag.5.ma)
 colnames(lag.5.ma.df)<- colnames(returns[2:50])
 #colnames(lag.5.ma.df)<- paste(colnames(returns[2:50]),"_5dayma")
@@ -453,49 +453,6 @@ ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) +
                        name="Pearson\nCorrelation") 
 ```
 
-
-```{r malagmodel, eval=FALSE, results="hide"}
-#week-lagged LASSO
-#windows run from the start of the window to the last full record
-for (tau in windowlength:nrow(df)) {
-        for (j in 1:49){
-        
-        #creating target, train and prediction data
-        #for window at (tau+lag), for industry j
-        
-        #take j values for time 2 onwards
-        train.target <- df[(tau-windowlength+2):tau,j+1]
-        
-        #take away date column
-        train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
-        #take away target column from predictors
-        train.predictors <- train.predictors[, -j]
-        #combine for one df
-        train.full <- cbind(train.target,train.predictors)
-        #newdata for predicting tau + 1
-        tau.newdata <- df[tau, (2:ncol(df))[2:ncol(df) != (j+1)]]
-        
-        #find historical mean value
-        laghistoricalmeanpredictions.ma[tau+1,j] <- mean(train.target)
-
-        #find cv with any vals lasso prediction
-        temp.mdl.lasso.ma <- cv.glmnet(as.matrix(train.predictors),
-                               as.matrix(train.target),
-                               lambda = c(0.01,0.025,0.05,0.1,0.125),
-                               alpha = 1, nfolds=5)
-        laglassopredictions.ma[tau+1,j] <- predict(temp.mdl.lasso.ma,
-                                        newx = as.matrix(tau.newdata),
-                                    type = "response")
-        laglassocoefs.ma[tau+1,] <- as.vector(coef(temp.mdl.lasso.ma))
-
-}
-##because this code takes a while to run, print for progress
-print(paste(round((tau-80)/444,3)*100,"%",sep=""))
-}
-save(laghistoricalmeanpredictions.ma,
-     laglassopredictions.ma,
-     file="lagmapredictions.RData")
-```
 
 ```{r 4lagprep, eval=FALSE}
 #4-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
@@ -608,21 +565,6 @@ linearSSE <- colSums(linearSE)
 lasso.clean <- as.data.frame(lassopredictions)[(windowlength+1):(nrow(lassopredictions)-1),]
 lassoSE <- (lasso.clean - actualsdf)^2
 lassoSSE <- colSums(lassoSE)
-
-#var.clean <- as.data.frame(varpredictions)[(windowlength+1):(nrow(varpredictions)-1),]
-#varSE <- (var.clean - actualsdf)^2
-#varSSE <- colSums(varSE)
-
-#lag with week
-# laghistoricalmeanpredictions.ma.clean <- as.data.frame(laghistoricalmeanpredictions.ma)[(windowlength+1):(nrow(laghistoricalmeanpredictions.ma)-1),]
-# laghistoricalmean.maSE <- (laghistoricalmeanpredictions.ma.clean - lagactualsma)^2
-# laghistoricalmean.maSSE <- colSums(laghistoricalmean.maSE)
-#   
-# lagactualsma <- returns[(windowlength+6):(nrow(returns)),2:ncol(returns)]
-# laglasso.ma.clean <- as.data.frame(laglassopredictions.ma)[(windowlength+1):(nrow(laglassopredictions.ma)-1),]
-# laglasso.maSE <- (laglasso.ma.clean - lagactualsma)^2
-# laglasso.maSSE <- colSums(laglasso.maSE)
-
 
 ###lag 4 days
 
