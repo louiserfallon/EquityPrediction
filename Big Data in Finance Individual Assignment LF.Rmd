@@ -15,7 +15,8 @@ library(randomForest) #for randomForest
 library(gbm) #for gbm
 library(knitr) #for kable
 library(gridExtra) #for gridarrange
-#library(vars) #for var
+library(vars) #for var
+library(caret) #for createFolds
 knitr::opts_chunk$set(cache = TRUE, echo=FALSE)
 ```
 
@@ -27,6 +28,8 @@ Using daily data on value-weighted returns from 49 industry-based portfolios, mu
 ```{r fig.height=3.5, fig.align='center'}
 #load data
 returns <- as.data.frame(read_excel("Data.xlsx", sheet = 1, col_names = TRUE, skip=3))
+#remove lagged spaces in column names
+for (i in 1:ncol(returns)) colnames(returns)[i] <- gsub(" ","",colnames(returns)[i])
 #remove row of NAs at the bottom
 returns <- returns[complete.cases(returns),]
 #add date column header
@@ -246,6 +249,7 @@ lag6 <- ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) +
                        midpoint = 0, limit = c(-.2,.2), space = "Lab",
                        name="Pearson\nCorrelation") 
 ```
+
 From the above we can see that in almost all cases the contemporanous correlations are positive, which is generally showing that the overall market moves in similar directions, potentially according to business cycle trends. The only clear anomaly here is Gold, which has much lower correlation, and in some cases a slighty negative correlation against Clothes and Banks, which is likely due to the fact that gold is often an "insurance" investment [REFERENCE]. This information is not particularly useful for the predictive task at hand, as prediction will be made for a time period in the future, when returns of other industries in that future time period will not be known.
 
 The below identifies the correlations between the industry returns at time t, against their returns at various lags, at lags of 2 and 4 there is a clear pattern of negative cross correlations, except for some outlier industries (these include Gold, Coal, Oil and interestingly for lag 4 also Fun). This negative cross-correlation is not in line with the results from (Lo and MacKinlay 1990), which may be because they use weekly data rather than daily data. The effect we could be seeing here is a "balancing" effect where short-term investors, or automatic traders potentially following a momentum strategy move money out of poorly performing industries and reinvest that money in other industries within a time frame of 2 or 4 days, pushing up the price and vice versa.
@@ -255,8 +259,6 @@ Regardless of the sign, if these correlations are significant then they are expe
 ```{r}
 grid.arrange(lag1,lag2,lag3,lag4,lag5,lag6, nrow=2)
 ```
-
-
 
 #Auto-correlation
 
@@ -317,7 +319,6 @@ condtable <- condformat(autocorrelationsdf) +
 condtable
 ```
 
-
 #Model Building
 
 Models were built to predict at time $\tau$, using data known at time $\tau$, the value of industry returns at time $\tau + 1$, using a rolling training window of 80 days ($\tau-80 to \tau-1$), to identify out of sample performance as per the model of (Goyal and Welch 2008).
@@ -327,19 +328,20 @@ Many predictive models were built, with a lag structure of 0, 1, 2 and 3, where 
 windowlength <- 80
 ```
 
-```{r eval=FALSE}
-#no-lag-setup
+```{r 1lagprep, eval=FALSE}
+#1-lag-setup
 df <- returns
 
 historicalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 linearpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 lassopredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+varpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
 
 linearcoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1)) 
 lassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
 ```
 
-```{r eval=FALSE, results="hide"}
+```{r 1lagmodel, eval=FALSE, results="hide"}
 #windows run from the start of the window to the last full record
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -387,16 +389,123 @@ save(historicalmeanpredictions,
      file="lag0predictions.RData")
 ```
 
-```{r eval=FALSE}
+```{r VAR, eval=FALSE}
+#Can only have 38 industries before problems with singularity w window =80
+#Works much better with window = 300
+VARwindow <- 300
+#testing VAR
+for (tau in VARwindow:nrow(df)) {
+        #creating target, train and prediction data
+        #for window at (tau+lag), VAR predicts for all industries at once
+        
+        #take j values for time 2 onwards
+        train.full <- df[(tau-VARwindow+2):tau,]
+        
+        for (k in 1:5)
+        {
+        #find VAR
+        temp.mdl.var <- VAR(train.full[, ],4)
+        summary(temp.mdl.var)
+        varpredictionslist <- predict(temp.mdl.var, n.ahead=1)
+        for (i in 1:length(varpredictionslist$fcst))
+        { j <- which(names(returns) == names(varpredictionslist$fcst[i]))-1
+          varpredictions[tau+1,j] <- (varpredictionslist$fcst[[i]])[1,1]}}
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+}
+```
+
+```{r malagprep, eval=FALSE}
+#4-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
+lag.0.ma <- returns[6:nrow(returns),] 
+lag.5.ma <- matrix(0, nrow=(nrow(returns)-5), ncol=49)
+for (i in 1:(nrow(returns)-5)) {
+  for (j in 1:49)
+  {lag.5.ma[i,j] <- mean(returns[i:(i+4),(j+1)])
+}}
+
+df <- cbind(lag.0.ma,lag.5.ma)
+  
+laghistoricalmeanpredictions.ma <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+laglassopredictions.ma <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
+
+laglassocoefs.ma <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
+```
+
+```{r}
+lag.5.ma.df <- as.data.frame(lag.5.ma)
+colnames(lag.5.ma.df)<- colnames(returns[2:50])
+#colnames(lag.5.ma.df)<- paste(colnames(returns[2:50]),"_5dayma")
+corrmatrix <- cor(lag.0.ma[2:50],lag.5.ma.df)
+
+melteddf<- melt(corrmatrix)
+ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+    labs(x = "", y = "", title = "") +
+    theme_bw() + ylab("Industry returns at time t") + xlab("Industry returns at 1 week moving average") +
+     theme(axis.text.x = element_text(angle=90, size=6),
+          axis.text.y = element_text(size=6),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.border = element_blank()) + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation") 
+```
+
+
+```{r malagmodel, eval=FALSE, results="hide"}
+#week-lagged LASSO
+#windows run from the start of the window to the last full record
+for (tau in windowlength:nrow(df)) {
+        for (j in 1:49){
+        
+        #creating target, train and prediction data
+        #for window at (tau+lag), for industry j
+        
+        #take j values for time 2 onwards
+        train.target <- df[(tau-windowlength+2):tau,j+1]
+        
+        #take away date column
+        train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
+        #take away target column from predictors
+        train.predictors <- train.predictors[, -j]
+        #combine for one df
+        train.full <- cbind(train.target,train.predictors)
+        #newdata for predicting tau + 1
+        tau.newdata <- df[tau, (2:ncol(df))[2:ncol(df) != (j+1)]]
+        
+        #find historical mean value
+        laghistoricalmeanpredictions.ma[tau+1,j] <- mean(train.target)
+
+        #find cv with any vals lasso prediction
+        temp.mdl.lasso.ma <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               lambda = c(0.01,0.025,0.05,0.1,0.125),
+                               alpha = 1, nfolds=5)
+        laglassopredictions.ma[tau+1,j] <- predict(temp.mdl.lasso.ma,
+                                        newx = as.matrix(tau.newdata),
+                                    type = "response")
+        laglassocoefs.ma[tau+1,] <- as.vector(coef(temp.mdl.lasso.ma))
+
+}
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+}
+save(laghistoricalmeanpredictions.ma,
+     laglassopredictions.ma,
+     file="lagmapredictions.RData")
+```
+
+```{r 4lagprep, eval=FALSE}
 #4-lag-setup (predicting t+1 with t,t-1,t-2, and t-3)
 lag.0 <- returns[4:nrow(returns),] 
-for (i in 1:ncol(lag.0)) colnames(lag.0)[i] <- gsub(" ","",colnames(lag.0)[i])
 lag.1 <- returns[3:(nrow(returns)-1),2:ncol(returns)]
-for (i in 1:ncol(lag.1)) colnames(lag.1)[i] <- gsub(" ","", paste(colnames(lag.1)[i],"_lag_1",sep="")) 
+for (i in 1:ncol(lag.1)) colnames(lag.1)[i] <- paste(colnames(lag.1)[i],"_lag_1",sep="") 
 lag.2 <- returns[2:(nrow(returns)-2),2:ncol(returns)]
-for (i in 1:ncol(lag.2)) colnames(lag.2)[i] <- gsub(" ","", paste(colnames(lag.2)[i],"_lag_2",sep=""))
+for (i in 1:ncol(lag.2)) colnames(lag.2)[i] <- paste(colnames(lag.2)[i],"_lag_2",sep="")
 lag.3 <- returns[1:(nrow(returns)-3),2:ncol(returns)]
-for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- gsub(" ","", paste(colnames(lag.3)[i],"_lag_3",sep=""))
+for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- paste(colnames(lag.3)[i],"_lag_3",sep="")
 df <- cbind(lag.0,lag.1,lag.2,lag.3)
   
 laghistoricalmeanpredictions4 <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
@@ -410,7 +519,7 @@ laglassocoefs <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
 laglassocoefscv <- matrix(0, ncol = (ncol(df)-1), nrow = (nrow(df)+1))
 ```
 
-```{r eval=FALSE, results="hide"}
+```{r 4lagmodel, eval=FALSE, results="hide"}
 #4-LAGGED LASSO AND RF MODEL
 #windows run from the start of the window to the last full record
 for (tau in windowlength:nrow(df)) {
@@ -482,7 +591,7 @@ save(laghistoricalmeanpredictions4,
      file="lag4predictions.RData")
 ```
 
-```{r}
+```{r performancecalc}
 load("lag0predictions.RData")
 load("lag4predictions.RData")
 #Out of Sample Accuracy
@@ -499,6 +608,23 @@ linearSSE <- colSums(linearSE)
 lasso.clean <- as.data.frame(lassopredictions)[(windowlength+1):(nrow(lassopredictions)-1),]
 lassoSE <- (lasso.clean - actualsdf)^2
 lassoSSE <- colSums(lassoSE)
+
+#var.clean <- as.data.frame(varpredictions)[(windowlength+1):(nrow(varpredictions)-1),]
+#varSE <- (var.clean - actualsdf)^2
+#varSSE <- colSums(varSE)
+
+#lag with week
+# laghistoricalmeanpredictions.ma.clean <- as.data.frame(laghistoricalmeanpredictions.ma)[(windowlength+1):(nrow(laghistoricalmeanpredictions.ma)-1),]
+# laghistoricalmean.maSE <- (laghistoricalmeanpredictions.ma.clean - lagactualsma)^2
+# laghistoricalmean.maSSE <- colSums(laghistoricalmean.maSE)
+#   
+# lagactualsma <- returns[(windowlength+6):(nrow(returns)),2:ncol(returns)]
+# laglasso.ma.clean <- as.data.frame(laglassopredictions.ma)[(windowlength+1):(nrow(laglassopredictions.ma)-1),]
+# laglasso.maSE <- (laglasso.ma.clean - lagactualsma)^2
+# laglasso.maSSE <- colSums(laglasso.maSE)
+
+
+###lag 4 days
 
 lagactuals4 <- returns[(windowlength+4):(nrow(returns)),2:ncol(returns)]
 
@@ -523,10 +649,12 @@ laggbml4SE <- (laggbmpredictionslaplace.clean - lagactuals4)^2
 laggbml4SSE <- colSums(laggbml4SE)
 ```
 
-```{r}
+```{r performanceshow}
 R2oos <- data.frame(
                     linear = round(1-(linearSSE/historicalmeanSSE),4),
                     lasso =  round(1-(lassoSSE/historicalmeanSSE),4),
+                    #var =  round(1-(varSSE/historicalmeanSSE),4),
+                    #laglassoma = round(1-(laglasso.maSSE/laghistoricalmean.maSSE),4),
                     laglasso4cv = round(1-(laglassocv4SSE/laghistoricalmean4SSE),4),
                     lagrf4 = round(1-(lagrf4SSE/laghistoricalmean4SSE),4),
                     laggbmgauss4 = round(1-(laggbmg4SSE/laghistoricalmean4SSE),4),
@@ -589,7 +717,7 @@ It is well known that momentum is not the same as positive autocorrelation: mome
 http://finance.martinsewell.com/stylized-facts/dependence/Lewellen2002.pdf
 Negative x correlation month -> year.
 
-
+VAR: https://cran.r-project.org/web/packages/vars/vignettes/vars.pdf
 
 Journal of Statistical Software
 October 2006, Volume 17, Issue 2. http://www.jstatsoft.org/
