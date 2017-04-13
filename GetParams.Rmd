@@ -1,0 +1,129 @@
+---
+title: "ModelPrepandRun"
+author: "Louise Fallon"
+date: "12 April 2017"
+output: html_document
+---
+```{R}
+library(glmnet) #for cv.glmnet (LASSO and elastic nets)
+```
+
+```{r loaddata}
+#load data
+returns <- as.data.frame(read_excel("Data.xlsx", sheet = 1, col_names = TRUE, skip=3))
+#remove lagged spaces in column names
+for (i in 1:ncol(returns)) colnames(returns)[i] <- gsub(" ","",colnames(returns)[i])
+#remove row of NAs at the bottom
+returns <- returns[complete.cases(returns),]
+#add date column header
+names(returns)[1] <- "date"
+```
+
+```{r overallparams}
+windowlength <- 80
+```
+
+```{r 4lagprep}
+lag.1 <- returns[4:nrow(returns),] 
+for (i in 1:ncol(lag.4)) colnames(lag.4)[i] <- paste(colnames(lag.4)[i],"_lag_1",sep="")
+lag.4 <- returns[1:(nrow(returns)-3),2:ncol(returns)]
+for (i in 1:ncol(lag.4)) colnames(lag.4)[i] <- paste(colnames(lag.4)[i],"_lag_4",sep="")
+
+df.4only <- cbind(lag.1,lag.4)
+df <- df.4only
+lassopredictions.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
+coefsum <- matrix(0, nrow = 49, ncol = (ncol(df.4only)))
+
+for (tau in windowlength:nrow(df)) {
+        for (j in 1:49){
+        
+        #creating target, train and prediction data
+        #for window at tau, for industry j
+        
+        #take j values for time 2 onwards
+        train.target <- df[(tau-windowlength+2):tau,j+1]
+        
+        #take away date column
+        train.predictors <- df[(tau-windowlength+1):(tau-1),2:ncol(df)]
+
+        #combine for one df
+        train.full <- (cbind(train.target,train.predictors))
+        
+        #newdata for predicting tau + 1
+        tau.newdata <- df[tau, 2:ncol(df)]
+
+        #find lasso model prediction
+        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1, nfolds=5)
+        #extract coefficients
+        coefs <- as.matrix(coefficients(temp.mdl.lasso.allcv))
+        coefsdf <- data.frame(variable =rownames(coefs),
+                              coefficients=coefs[,1])
+        
+        #add 1 to the sum of coefficients if it is used in the model
+        for (i in 1:nrow(coefsdf)) {
+          if (coefsdf$coefficients[i] > 0) coefsum[j,i] <- coefsum[j,i]+1}
+        
+        #predict
+        lassopredictions.4.only[tau+1,j] <- predict(temp.mdl.lasso.allcv,
+                                        newx = as.matrix(tau.newdata),
+                                    type = "response")
+}
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+}
+save(lassopredictions.4.only,
+     coefsum,
+     file="lassoallpredictions4only.RData")
+```
+
+```{r coef table}
+coefcounttable <- matrix(0, nrow=49, ncol=8)
+
+for (i in 1:49){
+  #assumption that this is without date
+  coefcounttable[i,1] <- coefsum[i,i+1]
+  coefcounttable[i,2] <- coefsum[i,i+50]
+  
+  temp.coefsdf <- data.frame(variable=coefsdf$variable,
+                             sums= coefsum[i,])
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(1,i+1,i+50),]
+
+  #find the next other most used variable
+  highestvar <- which.max(temp.coefsdf$sums)[1]
+  if (temp.coefsdf$sums[highestvar] != 0) coefcounttable[i,3] <- as.character(temp.coefsdf$variable[highestvar])
+  coefcounttable[i,4] <- temp.coefsdf$sums[highestvar]
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(highestvar),]
+  
+  #find the second other most used variable
+  highestvar <- which.max(temp.coefsdf$sums)[1]
+  if (temp.coefsdf$sums[highestvar] != 0) coefcounttable[i,5] <- as.character(temp.coefsdf$variable[highestvar])
+  coefcounttable[i,6] <- temp.coefsdf$sums[highestvar]
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(highestvar),]
+  
+  #find the third other most used variable
+  highestvar <- which.max(temp.coefsdf$sums)[1]
+  if (temp.coefsdf$sums[highestvar] != 0) coefcounttable[i,7] <- as.character(temp.coefsdf$variable[highestvar])
+  coefcounttable[i,8] <- temp.coefsdf$sums[highestvar]
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(highestvar),]
+}
+coefcounttable <- cbind(names(returns[2:ncol(returns)]),coefcounttable)
+```
+
+```{r lag4newsperformanceprep}
+historicalmeanpredictions.4.news.clean <- as.data.frame(historicalmeanpredictions.4.news)[(windowlength+1):(nrow(historicalmeanpredictions.4.news)-1),]
+historicalmean.news.4SE <- (historicalmeanpredictions.4.news.clean - lagactuals4.news)^2
+historicalmean.news.4SSE <- colSums(historicalmean.news.4SE)
+
+lassopredictionscv.4.news.all.clean <- as.data.frame(lassopredictionscv.4.news.all)[(windowlength+1):(nrow(lassopredictionscv.4.news.all)-1),]
+lasso.cv.news.4.allSE <- (lassopredictionscv.4.news.all.clean - lagactuals4.news)^2
+lasso.cv.news.4.allSSE <- colSums(lasso.cv.news.4.allSE)
+```
+
+```{r r2oos}
+R2oos <- data.frame(
+                    lassoall4news = round(1-(lasso.cv.news.4.allSSE/historicalmean.news.4SSE),4))
+R2oos <- rbind(colMeans(R2oos),R2oos)
+R2oos
+```
