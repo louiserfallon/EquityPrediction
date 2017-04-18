@@ -8,6 +8,7 @@ output: html_document
 library(glmnet) #for cv.glmnet (LASSO and elastic nets)
 library(randomForest) #for randomForest
 library(gbm) #for gbm
+library(condformat) #for condformat
 ```
 
 ```{r loaddata}
@@ -27,16 +28,13 @@ windowlength <- 80
 
 ```{r 1lagprep}
 df.1 <- returns
-
-historicalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-linearpredictions.1.own <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-linearpredictions.1.all <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-lassopredictionsman.1.all <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-lassopredictionscv.1.all <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-  
 ```
 
 ```{r own1lagmodel}
+set.seed(848)
+historicalmeanpredictions <- matrix(0, ncol = 49, nrow = (nrow(df.1)+1))
+linearpredictions.1.own <- matrix(0, ncol = 49, nrow = (nrow(df.1)+1))
+
 df <- df.1
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -76,7 +74,12 @@ save(historicalmeanpredictions,
 ```
 
 ```{r alllag1models}
+set.seed(88)
 df <- df.1
+
+linearpredictions.1.all <- matrix(0, ncol = 49, nrow = (nrow(df.1)+1))
+lassopredictionscv.1.all <- matrix(0, ncol = 49, nrow = (nrow(df.1)+1))
+
 #windows run from the start of the window to the last full record
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -117,9 +120,6 @@ save(linearpredictions.1.all,
 ```
 
 ```{r lag1performanceprep}
-load("linearownpredictions.RData")
-load("lag1allpredictions.RData")
-
 actualsdf <- returns[(windowlength+1):(nrow(returns)),2:ncol(returns)]
 
 historicalmeanpredictions.clean <- as.data.frame(historicalmeanpredictions)[(windowlength+1):(nrow(historicalmeanpredictions)-1),]
@@ -157,44 +157,45 @@ df.1.news <- merge(df.1.temp,industrynews, by=c("date","date"))
 ```
 
 ```{r alllag1newsmodel}
-df <- df.1.news
-historicalmeanpredictions.1.news <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-lassopredictionscv.1.all.news <- matrix(0, ncol = 49, nrow = (nrow(df)+1))
-#windows run from the start of the window to the last full record
-for (tau in windowlength:nrow(df)) {
-        for (j in 1:49){
-        
-        #creating target, train and prediction data
-        #for window at tau, for industry j
-        
-        #take j values for time 2 onwards
-        train.target <- df[(tau-windowlength+2):tau,j+1]
-        
-        #take away date column
-        train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
-
-        #combine for one df
-        train.full <- cbind(train.target,train.predictors)
-        #newdata for predicting tau + 1
-        tau.newdata <- df[tau, (2:ncol(df))]
-        
-        #find historical mean
-        historicalmeanpredictions.1.news[tau+1,j]  <- mean(train.target)
-
-        #find cv
-        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
-                               as.matrix(train.target),
-                               alpha = 1, nfolds=5)
-        lassopredictionscv.1.all.news[tau+1,j] <- predict(temp.mdl.lasso.allcv,
-                                        newx = as.matrix(tau.newdata),
-                                    type = "response")
-}
-##because this code takes a while to run, print for progress
-print(paste(round((tau-80)/444,3)*100,"%",sep=""))
-}
-save(linearpredictions.1.all.news,
-     lassopredictionscv.1.all.news,
-     file="lag1allnewspredictions.RData")
+# set.seed(848)
+# historicalmeanpredictions.1.news <- matrix(0, ncol = 49, nrow = (nrow(df.1.news)+1))
+# lassopredictionscv.1.all.news <- matrix(0, ncol = 49, nrow = (nrow(df.1.news)+1))
+# df <- df.1.news
+# 
+# #windows run from the start of the window to the last full record
+# for (tau in windowlength:nrow(df)) {
+#         for (j in 1:49){
+#         
+#         #creating target, train and prediction data
+#         #for window at tau, for industry j
+#         
+#         #take j values for time 2 onwards
+#         train.target <- df[(tau-windowlength+2):tau,j+1]
+#         
+#         #take away date column
+#         train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
+# 
+#         #combine for one df
+#         train.full <- cbind(train.target,train.predictors)
+#         #newdata for predicting tau + 1
+#         tau.newdata <- df[tau, (2:ncol(df))]
+#         
+#         #find historical mean
+#         historicalmeanpredictions.1.news[tau+1,j]  <- mean(train.target)
+# 
+#         #find cv
+#         temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
+#                                as.matrix(train.target),
+#                                alpha = 1, nfolds=5)
+#         lassopredictionscv.1.all.news[tau+1,j] <- predict(temp.mdl.lasso.allcv,
+#                                         newx = as.matrix(tau.newdata),
+#                                     type = "response")
+# }
+# ##because this code takes a while to run, print for progress
+# print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+# }
+# save(lassopredictionscv.1.all.news,
+#      file="lag1allnewspredictions.RData")
 ```
 
 ```{r lag1newsperformanceprep}
@@ -222,15 +223,13 @@ for (i in 1:ncol(lag.3)) colnames(lag.3)[i] <- paste(colnames(lag.3)[i],"_lag_3"
 lag.4 <- returns[1:(nrow(returns)-3),2:ncol(returns)]
 for (i in 1:ncol(lag.4)) colnames(lag.4)[i] <- paste(colnames(lag.4)[i],"_lag_4",sep="")
 df.4 <- cbind(lag.1,lag.2,lag.3,lag.4)
-
-historicalmeanpredictions.4 <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
-linearpredictions.4.own <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
-lassopredictionscv.4.own <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
-lassopredictionscv.4.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
-lassopredictionscv.nodate.4.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
 ```
 
 ```{r own4lagmodel}
+set.seed(848)
+historicalmeanpredictions.4 <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+linearpredictions.4.own <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+lassopredictionscv.4.own <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
 df <- df.4
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -271,10 +270,107 @@ print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
 save(linearpredictions.4.own,
      lassopredictionscv.4.own,
-     file="linearownpredictions4.RData")
+     file="ownpredictions4.RData")
 ```
 
 ```{r all4lagmodel}
+set.seed(88)
+lassopredictionscv.4.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+coefsum <- matrix(0, nrow = 49, ncol = (ncol(df.4)+1))
+
+df <- df.4
+for (tau in windowlength:nrow(df)) {
+        for (j in 1:49){
+        
+        #creating target, train and prediction data
+        #for window at tau, for industry j
+        
+        #take j values for time 2 onwards
+        train.target <- df[(tau-windowlength+2):tau,j+1]
+        
+        #take away date column
+        train.predictors <- df[(tau-windowlength+1):(tau-1), 2:ncol(df)]
+
+        #combine for one df
+        train.full <- (cbind(train.target,train.predictors))
+        
+        #newdata for predicting tau + 1
+        tau.newdata <- df[tau, 2:ncol(df)]
+
+        #find historical mean value
+        historicalmeanpredictions.4[tau+1,j] <- mean(train.target)
+
+        #find lasso model prediction
+        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
+                               as.matrix(train.target),
+                               alpha = 1, nfolds=5)
+        
+        #extract coefficients
+        coefs <- as.matrix(coefficients(temp.mdl.lasso.allcv))
+        coefsdf <- data.frame(variable =rownames(coefs),
+                              coefficients=coefs[,1])
+        
+        #add 1 to the sum of coefficients if it is used in the model
+        for (i in 2:nrow(coefsdf)) {
+          if (coefsdf$coefficients[i] != 0) {
+            print(paste("tau",tau,"coef",i,sep=""))
+            coefsum[j,i] <- coefsum[j,i]+1}}
+        
+        lassopredictionscv.4.all[tau+1,j] <- predict(temp.mdl.lasso.allcv,
+                                        newx = as.matrix(tau.newdata),
+                                    type = "response")
+}
+##because this code takes a while to run, print for progress
+print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+}
+save(historicalmeanpredictions.4,
+     lassopredictionscv.4.all,
+     coefsum,
+     file="allpredictions4.RData")
+```
+
+```{r coef table}
+coefcounttable <- matrix(0, nrow=49, ncol=8)
+coefsum <- coefsum[,1:197]
+for (i in 1:49){
+  #assumption that this is without date
+  coefcounttable[i,1] <- coefsum[i,i+1]
+  coefcounttable[i,2] <- coefsum[i,i+50]
+  coefcounttable[i,3] <- coefsum[i,i+99]
+  coefcounttable[i,4] <- coefsum[i,i+148]
+  
+  temp.coefsdf <- data.frame(variable=coefsdf$variable,
+                             sums= coefsum[i,])
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(1,i+1,i+50, i+99,i+148),]
+
+  #find the next other most used variable
+  highestvar <- which.max(temp.coefsdf$sums)[1]
+  if (temp.coefsdf$sums[highestvar] != 0) coefcounttable[i,5] <- as.character(temp.coefsdf$variable[highestvar])
+  coefcounttable[i,6] <- temp.coefsdf$sums[highestvar]
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(highestvar),]
+  
+  #find the second other most used variable
+  highestvar <- which.max(temp.coefsdf$sums)[1]
+  if (temp.coefsdf$sums[highestvar] != 0) coefcounttable[i,7] <- as.character(temp.coefsdf$variable[highestvar])
+  coefcounttable[i,8] <- temp.coefsdf$sums[highestvar]
+  temp.coefsdf <- temp.coefsdf[!(1:nrow(temp.coefsdf)) %in% c(highestvar),]
+}
+coefcounttable <- cbind(names(returns[2:ncol(returns)]),coefcounttable)
+
+colnames(coefcounttable) <- c("Industry",
+                              "Lag1","Lag2","Lag3","Lag4",
+                              "V1", "V1 Usage",
+                              "V2", "V2 Usage")
+save(coefcounttable, file="coefcounttable.Rdata")
+```
+
+```{r all4lagmodeladvanced}
+set.seed(848)
+lagrfpredictions.4.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+laggbmpredictionsgauss.4.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+lagrfpredictions.4.cv.all <- matrix(0, ncol = 49, nrow = (nrow(df.4)+1))
+rfmodelused <- vector()
+
 df <- df.4
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -293,70 +389,53 @@ for (tau in windowlength:nrow(df)) {
         
         #newdata for predicting tau + 1
         tau.newdata <- df[tau, ]
+        
+        #find random forest prediction with CV
+        params <- list(c(40,2),c(50,2),c(50,3),c(50,4),c(80,2))
+        error <- 100
+        for (p in params)
+        {
+        cv.temp.mdl.randomforest <- randomForest(train.target ~ .,data=train.full,
+                            ntree=p[1],
+                            nodesize=p[2])
+        if (cv.temp.mdl.randomforest$mse[p[1]] < error){
+          temp.mdl.randomforest <- cv.temp.mdl.randomforest
+          error <- cv.temp.mdl.randomforest$mse[p[1]]
+          paramsused <- p}
+        }
+        rfmodelused <- rbind(rfmodelused,paramsused)
+ 
+        lagrfpredictions.4.cv.all[tau+1,j] <- predict(temp.mdl.randomforest, tau.newdata)
 
-        #find historical mean value
-        historicalmeanpredictions.4[tau+1,j] <- mean(train.target)
-
-        #find lasso model prediction
-        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
-                               as.matrix(train.target),
-                               alpha = 1, nfolds=5)
-        lassopredictionscv.4.all[tau+1,j] <- predict(temp.mdl.lasso.allcv,
-                                        newx = as.matrix(tau.newdata),
-                                    type = "response")
+        #  #find gaussian general boosting
+        # temp.mdl.gbm.gaus <- gbm(train.target ~ .,
+        #                     data=train.full,
+        #                     distribution="gaussian",
+        #                     n.trees=50,
+        #                     cv.folds=4)
+        # laggbmpredictionsgauss.4.all[tau+1,j] <- predict(temp.mdl.gbm.gaus,
+        #                                       newdata=tau.newdata,
+        #                                       n.trees=50,
+        #                                       n.cores=1)
+        # 
 }
 ##because this code takes a while to run, print for progress
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
-save(lassopredictionscv.4.all,
-     file="lassoallpredictions4.RData")
-```
-
-```{r all4lagmodelnodate}
-df <- df.4
-for (tau in windowlength:nrow(df)) {
-        for (j in 1:49){
-        
-        #creating target, train and prediction data
-        #for window at tau, for industry j
-        
-        #take j values for time 2 onwards
-        train.target <- df[(tau-windowlength+2):tau,j+1]
-        
-        #take away date column
-        train.predictors <- df[(tau-windowlength+1):(tau-1),2:ncol(df)]
-
-        #combine for one df
-        train.full <- (cbind(train.target,train.predictors))
-        
-        #newdata for predicting tau + 1
-        tau.newdata <- df[tau, 2:ncol(df)]
-
-        #find historical mean value
-        historicalmeanpredictions.4[tau+1,j] <- mean(train.target)
-
-        #find lasso model prediction
-        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
-                               as.matrix(train.target),
-                               alpha = 1, nfolds=5)
-        lassopredictionscv.nodate.4.all[tau+1,j] <- predict(temp.mdl.lasso.allcv,
-                                        newx = as.matrix(tau.newdata),
-                                    type = "response")
-}
-##because this code takes a while to run, print for progress
-print(paste(round((tau-80)/444,3)*100,"%",sep=""))
-}
-save(lassopredictionscv.4.all,
-     file="lassoallpredictions4.RData")
+save(lagrfpredictions.4.cv.all,
+     #laggbmpredictionsgauss.4.all,
+     file="allpredictions4advancedcv.RData")
 ```
 
 ```{r all4lagmodelonly}
+set.seed(848)
+
 df.4only <- cbind(lag.1,lag.4)
 df <- df.4only
 lassopredictions.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
-lagrfpredictions.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
-laggbmpredictionsgauss.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
-laggbmpredictionslaplace.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
+# lagrfpredictions.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
+# laggbmpredictionsgauss.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
+# laggbmpredictionslaplace.4.only <- matrix(0, ncol = 49, nrow = (nrow(df.4only)+1))
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
         
@@ -382,47 +461,18 @@ for (tau in windowlength:nrow(df)) {
         lassopredictions.4.only[tau+1,j] <- predict(temp.mdl.lasso.allcv,
                                         newx = as.matrix(tau.newdata),
                                     type = "response")
-        
-        #find random forest prediction
-        temp.mdl.randomforest <- randomForest(train.target ~ .,
-                                              data=train.full,
-                                              ntree=50,
-                                              nodesize=2)
-        lagrfpredictions.4.only[tau+1,j] <- predict(temp.mdl.randomforest, tau.newdata)
-        
-         #find gaussian general boosting
-        temp.mdl.gbm.gaus <- gbm(train.target ~ .,
-                            data=train.full,
-                            distribution="gaussian",
-                            n.trees=50,
-                            n.cores=1)
-        laggbmpredictionsgauss.4.only[tau+1,j] <- predict(temp.mdl.gbm.gaus,
-                                              newdata=tau.newdata,
-                                              n.trees=50,
-                                              n.cores=1)
-        #find laplace boosting
-        temp.mdl.gbm.laplace <- gbm(train.target ~ .,
-                            data=train.full,
-                            distribution="laplace",
-                            n.trees=50)
-        laggbmpredictionslaplace.4.only[tau+1,j] <- predict(temp.mdl.gbm.laplace,
-                                              newdata=tau.newdata,
-                                              n.trees=50)
 }
 ##because this code takes a while to run, print for progress
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
 save(lassopredictions.4.only,
-     lagrfpredictions.4.only,
-     laggbmpredictionsgauss.4.only,
-     laggbmpredictionslaplace.4.only,
-     file="lassoallpredictions4only.RData")
+     #lagrfpredictions.4.only,
+     #laggbmpredictionsgauss.4.only,
+     #laggbmpredictionslaplace.4.only,
+     file="allpredictions4only.RData")
 ```
 
 ```{r lag4performanceprep}
-load("linearownpredictions4.RData")
-load("lassoallpredictions4.RData")
-
 lag4actualsdf <- returns[(windowlength+4):(nrow(returns)),2:ncol(returns)]
 
 historicalmeanpredictions.4.clean <- as.data.frame(historicalmeanpredictions.4)[(windowlength+1):(nrow(historicalmeanpredictions.4)-1),]
@@ -441,29 +491,25 @@ lassopredictionscv.4.all.clean <- as.data.frame(lassopredictionscv.4.all)[(windo
 lasso.cv.4.allSE <- (lassopredictionscv.4.all.clean - lag4actualsdf)^2
 lasso.cv.4.allSSE <- colSums(lasso.cv.4.allSE)
 
-lassopredictionscv.nodate.4.all.clean <- as.data.frame(lassopredictionscv.nodate.4.all)[(windowlength+1):(nrow(lassopredictionscv.nodate.4.all)-1),]
-lasso.cv.nodate.4.allSE <- (lassopredictionscv.nodate.4.all.clean - lag4actualsdf)^2
-lasso.cv.nodate.4.allSSE <- colSums(lasso.cv.nodate.4.allSE)
-
 lassopredictions.4.only.clean <- 
 as.data.frame(lassopredictions.4.only)[(windowlength+1):(nrow(lassopredictions.4.only)-1),]
 lasso.4.only.allSE <- (lassopredictions.4.only.clean - lag4actualsdf)^2
 lasso.4.only.allSSE <- colSums(lasso.4.only.allSE)
 
-lagrfpredictions.4.only.clean <- 
-as.data.frame(lagrfpredictions.4.only)[(windowlength+1):(nrow(lagrfpredictions.4.only)-1),]
-lagrf.4.onlySE <- (lagrfpredictions.4.only.clean - lag4actualsdf)^2
-lagrf.4.onlySSE <- colSums(lagrf.4.onlySE)
+lagrfpredictions.4.all.clean <-
+as.data.frame(lagrfpredictions.4.all)[(windowlength+1):(nrow(lagrfpredictions.4.all)-1),]
+lagrf.4.allSE <- (lagrfpredictions.4.all.clean - lag4actualsdf)^2
+lagrf.4.allSSE <- colSums(lagrf.4.allSE)
 
-laggbmpredictionsgauss.4.only.clean <- 
-as.data.frame(laggbmpredictionsgauss.4.only)[(windowlength+1):(nrow(laggbmpredictionsgauss.4.only)-1),]
-laggbmgauss.4.onlySE <- (laggbmpredictionsgauss.4.only.clean - lag4actualsdf)^2
-laggbmgauss.4.onlySSE <- colSums(laggbmgauss.4.onlySE)
+lagrfpredictions.4.cv.all.clean <- 
+as.data.frame(lagrfpredictions.4.cv.all)[(windowlength+1):(nrow(lagrfpredictions.4.cv.all)-1),]
+lagrf.4.allcvlSE <- (lagrfpredictions.4.cv.all.clean - lag4actualsdf)^2
+lagrf.4.allcvSSE <- colSums(lagrf.4.allcvlSE)
 
-laggbmpredictionslaplace.4.only.clean <- 
-as.data.frame(laggbmpredictionslaplace.4.only)[(windowlength+1):(nrow(laggbmpredictionslaplace.4.only)-1),]
-laggbmlaplace.4.onlySE <- (laggbmpredictionslaplace.4.only.clean - lag4actualsdf)^2
-laggbmlaplace.4.onlySSE <- colSums(laggbmlaplace.4.onlySE)
+laggbmpredictionsgauss.4.all.clean <-
+as.data.frame(laggbmpredictionsgauss.4.all)[(windowlength+1):(nrow(laggbmpredictionsgauss.4.all)-1),]
+laggbmgauss.4.allSE <- (laggbmpredictionsgauss.4.all.clean - lag4actualsdf)^2
+laggbmgauss.4.allSSE <- colSums(laggbmgauss.4.allSE)
 ```
 
 ```{r 4lagnewsprep}
@@ -481,12 +527,12 @@ industrynews <- industrynews[,2:ncol(industrynews)]
 for (i in 2:ncol(industrynews)) colnames(industrynews)[i] <- paste(colnames(industrynews)[i],"_news",sep="") 
 
 df.4.news <- merge(df.4.temp,industrynews, by=c("date","date"))
-
-historicalmeanpredictions.4.news <- matrix(0, ncol = 49, nrow = (nrow(df.4.news)+1))
-lassopredictionscv.4.news.all <- matrix(0, ncol = 49, nrow = (nrow(df.4.news)+1))
 ```
 
 ```{r all4lagnewsmodel}
+set.seed(848)
+historicalmeanpredictions.4.news <- matrix(0, ncol = 49, nrow = (nrow(df.4.news)+1))
+lassopredictionscv.4.news.all <- matrix(0, ncol = 49, nrow = (nrow(df.4.news)+1))
 df <- df.4.news
 for (tau in windowlength:nrow(df)) {
         for (j in 1:49){
@@ -521,7 +567,7 @@ for (tau in windowlength:nrow(df)) {
 print(paste(round((tau-80)/444,3)*100,"%",sep=""))
 }
 save(lassopredictionscv.4.news.all,
-     file="lassoallpredictions4news.RData")
+     file="allpredictions4news.RData")
 ```
 
 ```{r 4lagonlynewsprep}
@@ -532,44 +578,44 @@ df.4.only.news <- merge(df.4.only.temp,industrynews, by=c("date","date"))
 ```
 
 ```{r all4lanewsgmodelonly}
-df<- df.4.only.news
-lassopredictions.4.only.news <- matrix(0, ncol = 49, nrow = (nrow(df.4.only.news)+1))
-for (tau in windowlength:nrow(df)) {
-        for (j in 1:49){
-        
-        #creating target, train and prediction data
-        #for window at tau, for industry j
-        
-        #take j values for time 2 onwards
-        train.target <- df[(tau-windowlength+2):tau,j+1]
-        
-        #take away date column
-        train.predictors <- df[(tau-windowlength+1):(tau-1),2:ncol(df)]
-
-        #combine for one df
-        train.full <- (cbind(train.target,train.predictors))
-        
-        #newdata for predicting tau + 1
-        tau.newdata <- df[tau, 2:ncol(df)]
-
-        #find lasso model prediction
-        temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
-                               as.matrix(train.target),
-                               alpha = 1, nfolds=5)
-        lassopredictions.4.only.news[tau+1,j] <- predict(temp.mdl.lasso.allcv,
-                                        newx = as.matrix(tau.newdata),
-                                    type = "response")
-}
-##because this code takes a while to run, print for progress
-print(paste(round((tau-80)/444,3)*100,"%",sep=""))
-}
-save(lassopredictions.4.only.news,
-     file="lassoallpredictions4onlynews.RData")
+# set.seed(8)
+# 
+# df<- df.4.only.news
+# lassopredictions.4.only.news <- matrix(0, ncol = 49, nrow = (nrow(df.4.only.news)+1))
+# for (tau in windowlength:nrow(df)) {
+#         for (j in 1:49){
+#         
+#         #creating target, train and prediction data
+#         #for window at tau, for industry j
+#         
+#         #take j values for time 2 onwards
+#         train.target <- df[(tau-windowlength+2):tau,j+1]
+#         
+#         #take away date column
+#         train.predictors <- df[(tau-windowlength+1):(tau-1),2:ncol(df)]
+# 
+#         #combine for one df
+#         train.full <- (cbind(train.target,train.predictors))
+#         
+#         #newdata for predicting tau + 1
+#         tau.newdata <- df[tau, 2:ncol(df)]
+# 
+#         #find lasso model prediction
+#         temp.mdl.lasso.allcv <- cv.glmnet(as.matrix(train.predictors),
+#                                as.matrix(train.target),
+#                                alpha = 1, nfolds=5)
+#         lassopredictions.4.only.news[tau+1,j] <- predict(temp.mdl.lasso.allcv,
+#                                         newx = as.matrix(tau.newdata),
+#                                     type = "response")
+# }
+# ##because this code takes a while to run, print for progress
+# print(paste(round((tau-80)/444,3)*100,"%",sep=""))
+# }
+# save(lassopredictions.4.only.news,
+#      file="allpredictions4onlynews.RData")
 ```
 
 ```{r lag4newsperformanceprep}
-load("lassoallpredictions4news.RData")
-
 lagactuals4.news <- returns
 lagactuals4.news$date <- as.Date(as.character(lagactuals4.news$date),"%Y%m%d")
 lagactuals4.news <- lagactuals4.news[lagactuals4.news$date <= "2016-07-02",]
@@ -583,44 +629,73 @@ lassopredictionscv.4.news.all.clean <- as.data.frame(lassopredictionscv.4.news.a
 lasso.cv.news.4.allSE <- (lassopredictionscv.4.news.all.clean - lagactuals4.news)^2
 lasso.cv.news.4.allSSE <- colSums(lasso.cv.news.4.allSE)
 
-lassopredictionscv.4.news.date.all.clean <- as.data.frame(lassopredictionscv.4.news.date.all)[(windowlength+1):(nrow(lassopredictionscv.4.news.date.all)-1),]
-lasso.cv.news.date.4.allSE <- (lassopredictionscv.4.news.date.all.clean - lagactuals4.news)^2
-lasso.cv.news.date.4.allSSE <- colSums(lasso.cv.news.date.4.allSE)
-
-lassopredictions.4.only.news.clean <- 
-as.data.frame(lassopredictions.4.only.news)[(windowlength+1):(nrow(lassopredictions.4.only.news)-1),]
-lasso.4.only.news.allSE <- (lassopredictions.4.only.news.clean - lagactuals4.news)^2
-lasso.4.only.news.allSSE <- colSums(lasso.4.only.news.allSE)
+# lassopredictions.4.only.news.clean <- 
+# as.data.frame(lassopredictions.4.only.news)[(windowlength+1):(nrow(lassopredictions.4.only.news)-1),]
+# lasso.4.only.news.allSE <- (lassopredictions.4.only.news.clean - lagactuals4.news)^2
+# lasso.4.only.news.allSSE <- colSums(lasso.4.only.news.allSE)
 ```
 
 ```{r r2oos}
 R2oos <- data.frame(
                     linearown1 = round(1-(linear.1.ownSSE/historicalmeanSSE),4),
-                    #linearown4 = round(1-(linear.4.ownSSE/historicalmean.4SSE),4),
-                    #lassoown4 = round(1-(lasso.cv.4.ownSSE/historicalmean.4SSE),4),
+                    linearown4 = round(1-(linear.4.ownSSE/historicalmean.4SSE),4),
+                    lassoown4 = round(1-(lasso.cv.4.ownSSE/historicalmean.4SSE),4),
                     linearall1 = round(1-(linear.1.allSSE/historicalmeanSSE),4),
                     lassall1 = round(1-(lasso.cv.1.allSSE/historicalmeanSSE),4),
                     #lassall1news = round(1-(lasso.cv.news.1.allSSE/historicalmean.news.1SSE),4),
-                    #lassoall4 = round(1-(lasso.cv.4.allSSE/historicalmean.4SSE),4),
-                    lassoall4 = round(1-(lasso.cv.nodate.4.allSSE/historicalmean.4SSE),4),
-                    lass4only = round(1-(lasso.4.only.allSSE/historicalmean.4SSE),4),
-                    #lassoall4news = round(1-(lasso.cv.news.4.allSSE/historicalmean.news.4SSE),4),
-                    #lassoall4news = round(1-(lasso.cv.news.date.4.allSSE/historicalmean.news.4SSE),4),
-                    lass4onlynews = round(1-(lasso.4.only.news.allSSE/historicalmean.news.4SSE),4),
-                    rf4onlynews = round(1-(lagrf.4.onlySSE/historicalmean.4SSE),4),
-                    gauss4onlynews = round(1-(laggbmgauss.4.onlySSE/historicalmean.4SSE),4),
-                    laplace4onlynews = round(1-(laggbmlaplace.4.onlySSE/historicalmean.4SSE),4)
+                    lassoall4 = round(1-(lasso.cv.4.allSSE/historicalmean.4SSE),4),
+                    #lass4only = round(1-(lasso.4.only.allSSE/historicalmean.4SSE),4),
+                    lassoall4news = round(1-(lasso.cv.news.4.allSSE/historicalmean.news.4SSE),4),
+                    # lass4onlynews = round(1-(lasso.4.only.news.allSSE/historicalmean.news.4SSE),4),
+                     rf4cv = round(1-(lagrf.4.allcvSSE/historicalmean.4SSE),4),
+                     gauss4all = round(1-(laggbmgauss.4.allSSE/historicalmean.4SSE),4)
                     )
 R2oos <- rbind(round(colMeans(R2oos),4),R2oos)
 R2oos <- rbind(rep(0,ncol(R2oos)),R2oos)
 for (i in 1:ncol(R2oos)){
   print(i)
   vect <- R2oos[,i]
-  print(max(vect))
-  print(which.max(vect))
   R2oos[1,i] <- length(vect[vect>0])
 }
 R2oos <- cbind(c("Total >0","Average",colnames(returns[2:ncol(returns)])),R2oos)
-names(R2oos)[1] <- "Industry"
-R2oos
+names(R2oos) <- c("Industry","Lin Own 1", "Lin Own 4", "L Own 4",
+                  "Lin 1", "L 1", "L 4",
+                  "L 4 news", "RF 4", "GBM 4")
+save(R2oos, file="R2oos.Rdata")
+```
+
+```{r condformattable}
+##
+#Note that it does not seem to be possible with the condtable package to run this in a for loop, or for all columns.
+#http://stackoverflow.com/questions/42565960/conditional-formatting-while-looping-through-columns-using-package-condformat
+##
+condr2table <- condformat(R2oos) +
+  rule_fill_discrete(2,
+                     expression = R2oos[,2] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(3,
+                     expression = R2oos[,3] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(4,
+                     expression = R2oos[,4] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(5,
+                     expression = R2oos[,5] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(6,
+                     expression = R2oos[,6] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(7,
+                     expression = R2oos[,7] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(8,
+                     expression = R2oos[,8] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(9,
+                     expression = R2oos[,9] > 0,
+                     colours = c("TRUE" = "#c2f0c2")) +
+  rule_fill_discrete(10,
+                     expression = R2oos[,10] > 0,
+                     colours = c("TRUE" = "#c2f0c2"))
+save(condr2table,file="condR2table.RData")
 ```

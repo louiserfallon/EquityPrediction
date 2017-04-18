@@ -7,23 +7,16 @@ output: pdf_document
 ```{r setup, include=FALSE}
 library(readxl) #for read_excel
 library(ggplot2) #for ggplot
-library(forecast) #for ggseasonplot and autoplot etc
 library(reshape2) #for melt
 library(condformat) #for condformat and rule_fill_discrete
-library(glmnet) #for cv.glmnet (LASSO and elastic nets)
-library(randomForest) #for randomForest
-library(gbm) #for gbm
 library(knitr) #for kable
 library(gridExtra) #for gridarrange
-library(vars) #for var
 knitr::opts_chunk$set(cache = FALSE, echo=FALSE)
 ```
 
 ## Introduction & Data
 
-Using daily data on value-weighted returns from 49 industry-based portfolios, multiple algorithms are trained and compared to predict future returns for each industry.
-
-```{r fig.height=3.5, fig.align='center'}
+```{r}
 #load data
 returns <- as.data.frame(read_excel("Data.xlsx", sheet = 1, col_names = TRUE, skip=3))
 #remove lagged spaces in column names
@@ -34,6 +27,11 @@ returns <- returns[complete.cases(returns),]
 names(returns)[1] <- "date"
 #plot boxplot of returns
 meltedreturns <- melt(returns, id.vars = "date")
+```
+Using daily data on value-weighted returns from 49 industry-based portfolios, multiple algorithms are trained and compared to predict future returns for each industry. The daily industry returns shown below are generally centered around 0, the lowest average return is for Coal at `r format(min(colMeans(returns[,2:50])),digits=3)`, and the highest is for Gold at `r format(max(colMeans(returns[,2:50])),digits=3)`, with clear differences in industry return variance ranging from 
+`r format(min(apply(returns[,2:50], 2, var)),digits=3)` for Household, and `r format(max(apply(returns[,2:50], 2, var)),digits=3)` for Coal. For this data to build a useful predictive model, we require a relationship between industry returns and lagged returns either in the same industry, or across other industries.
+
+```{r fig.height=2.5, fig.align='center'}
 ggplot(meltedreturns, aes(x=variable, y=value)) +
   geom_boxplot(col="#000066") + 
   theme_bw() + 
@@ -42,16 +40,13 @@ ggplot(meltedreturns, aes(x=variable, y=value)) +
   xlab("Industry") + ylab("Daily Returns")
 ```
 
-The daily industry returns shown above are generally centered around 0, the lowest average return is for Coal at `r format(min(colMeans(returns[,2:50])),digits=3)`, and the highest is for Gold at `r format(max(colMeans(returns[,2:50])),digits=3)`, with clear differences in industry return variance ranging from 
-`r format(min(apply(returns[,2:50], 2, var)),digits=3)` for Household, and `r format(max(apply(returns[,2:50], 2, var)),digits=3)` for Coal. For this data to build a useful predictive model, we require a relationship between industry returns and lagged returns either in the same industry, or across other industries.
+If industry momentum is a real phenomenon, as per (Grinblatt and Moskowitz 1999), where buying industry portfolios that are performing well and selling those not performing well is a money-making strategy, then we may expect to see a correlation between current returns with previous returns, within an industry. One of the reasons why we may expect to see momentum strategies performing well, as explained by (Hong and Stein 1999), is when information slowly diffuses through the network of investors, prices underreact to news in the short term as not everyone has heard the news, and overreact in the long term due to momentum traders. This is something we may expect to see at the daily return level. Momentum may still exist without autocorrelation (REFERENCE), but if past performance does have a relationship with future performance, either positively or negatively, but at least consistently, then including lagged variables of own-industry returns would be beneficial for a predictive model.
 
-If industry momentum is a real phenomenon, as per (Grinblatt and Moskowitz 1999), whereby industries that are performing well continue to do so, and industries that are not performing well also continue to do so, then we would expect to see a correlation between current returns with previous returns, within an industry. The analysis here differs from the Grinblatt & Moskowitz paper in that it focuses on daily price changes and lags, rather than monthly. One of the reasons why we may expect to see momentum, as explained by (Hong and Stein 1999), is when information slowly diffuses through the network of investors, prices underreact to news in the short term as not everyone has heard the news, and overreact in the long term due to momentum traders. This is something we may expect to see at the daily return level. If past performance has a relationship with future performance, either positively or negatively, but at least consistently, then including lagged variables of returns within the industry will be beneficial for a predictive model.
+Additionally, if there are reliable relationships between one industry's current returns and lagged returns of other industries in the dataset, then this would also aid predictive model building, non-linear models could also make use of any interactions between industry returns. We might expect to see positive cross-correlations in occasions where there is an upstream/downstream industry relationship e.g. with Textiles and Clothes, where information is gradually diffused (Menzly and Obas 2010), or where there are differences in analyst coverage (Brennan, Jegadeesh and Swaminathan 1993) such that industries with high levels of average coverage "lead" industies with lower levels. 
 
-Additionally, if there are reliable relationships between one industry's current returns and lagged returns of other industries in the dataset, then this would also be beneficial for predictive model building, and non-linear models could also make use of any interactions between industry returns. We might expect to see positive cross-correlations in occasions where there is an upstream/downstream industry relationship e.g. with Textiles and Clothes, where information is gradually diffused (Menzly and Obas 2010), or where there are differences in analyst coverage (Brennan, Jegadeesh and Swaminathan 1993) such that industries with high levels of average coverage "lead" industies with lower levels. 
+##Cross-correlation
 
-#Cross-correlation
-
-```{r fig.height=3}
+```{r }
 corrmatrix <- matrix(0, ncol=49,nrow=49)
 plotlist <- list()
 for (lag in 1:6){
@@ -91,21 +86,36 @@ for (i in 1:49){
                                  returns[1:(nrow(returns)-4),j+1])$p.value
   }
 }
+
+g_legend<-function(a.gplot){ 
+  tmp <- ggplot_gtable(ggplot_build(a.gplot)) 
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box") 
+  legend <- tmp$grobs[[leg]] 
+  return(legend)}
+
+plotforlegend <-  ggplot(data = melteddf, aes(x = Var1, y = Var2, fill = value)) + 
+    geom_tile() + 
+  scale_fill_gradient2(low = "#ce1254",mid="#ffffff", high = "#006699",
+                       midpoint = 0, limit = c(-.2,.2), space = "Lab",
+                       name="Pearson\nCorrelation")                                      
+legend <- g_legend(plotforlegend)
 ```
 
 In almost all cases the contemporaneous correlations are found to be positive, which is generally showing that the overall market moves in a similar direction, potentially according to business cycle trends. The only clear anomaly in this case is Gold, which has much lower correlation, and in some cases a slighty negative correlation against Clothes and Banks, which is likely due to the fact that gold is often used as a hedge against stocks, and gold companies also carry this effect (Baur and Lucey 2010). This contemporaneous information is not particularly useful for the predictive task at hand, as prediction will be made for a time period in the future, when returns of other industries in that future time period will not be known.
 
 The plots below show the correlations between the industry returns at time t, against their returns at various lags. At lags of 2 and 4 there is a clear pattern of negative cross correlations, except for some outlier industries (these include Gold, Coal, Oil and interestingly for lag 4 also Fun). This negative cross-correlation is not in line with the results from (Lo and MacKinlay 1990), where they see a positive cross-correlation. The effect we could be seeing here is a "balancing" effect where short-term investors, potentially following a momentum strategy, move money out of poorly performing industries and reinvest that money in other industries within a time frame of 2 or 4 days, pushing up the price in those industries and vice versa.
 
-Regardless of the sign, if these correlations are significant then they are expected to be useful within the predictive models, which for lag=4, `r length(corrtest[corrtest<0.1])` are at the 10% significance level, and `r length(corrtest[corrtest<0.05])` are at the 5% significance level. Although this is only a percentage of the `r 49*49` possible combinations, algorithms that deal with scarcity can use these to aid prediction e.g. the LASSO method (Chinco, Clark-Joseph and Ye 2017). What is not clear from these correlation plots is a clear pattern along the diagonal, implying auto-correlation in either direction may not be strong, this is tested further in the next section.
+Regardless of the sign, if these correlations are significant then they are expected to be useful within the predictive models, which for lag=4, `r length(corrtest[corrtest<0.1])` are at the 10% significance level, and `r length(corrtest[corrtest<0.05])` are at the 5% significance level. Although these correlations are low in absolute value, and this is only a percentage of the `r 49*49` possible combinations, prediction of equity returns with previous returns is a situation with a low signal:noise ratio, and algorithms that deal with scarcity can potentially use these correlations to aid prediction e.g. the LASSO method (Chinco, Clark-Joseph and Ye 2017).
 
-```{r}
-grid.arrange(plotlist[[1]],plotlist[[2]],plotlist[[3]],plotlist[[4]],plotlist[[5]],plotlist[[6]], nrow=2)
+```{r fig.height=3.5}
+lay <- matrix(c(1,2,3,
+                4,5,6),ncol=3,byrow = TRUE)
+grid.arrange(plotlist[[1]],plotlist[[2]],plotlist[[3]],plotlist[[4]],plotlist[[5]], legend, layout_matrix= lay)
 ```
 
-#Auto-correlation
+What is not clear from these correlation plots is a clear pattern along the diagonal, implying auto-correlation in either direction may not be strong, this is tested further in the next section.
 
-Using a Box-Pierce test each industry return series was tested for autocorrelation with lags up to 10 working days. The results displayed below show the correlation between the returns at time t and returns at time t-lag, and are highlighted in bold when the Box-Pierce test implies that these are statistically significant at the 10% level, providing that there is evidence of autocorrelation. This shows that in most cases there is no statistically significant autocorrelation for an industry portfolio, but in cases where there is autocorrelation, this is often negative (in fact, for lags up to 4 all significant autocorrelations are negative except for Steel).
+##Auto-correlation
 
 ```{r cache=FALSE}
 boxpiercevalue <- matrix(0, nrow = 49, ncol = 10) 
@@ -126,57 +136,57 @@ names(autocorrelationsdf) <- c("Industry","Lag 1","Lag 2","Lag 3",
                         "Lag 4","Lag 5","Lag 6","Lag 7",
                         "Lag 8","Lag 9","Lag 10")
 
+posautocorrelations <- vector()
+negautocorrelations <- vector()
 
 pval <- 0.1
-condtable <- condformat(autocorrelationsdf) + 
-                     rule_fill_discrete(2,
-                     expression =  boxpiercevalue[,1] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                     rule_fill_discrete(3,
-                     expression = boxpiercevalue[,2] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(4,
-                     expression = boxpiercevalue[,3] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(5,
-                     expression = boxpiercevalue[,4] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(6,
-                     expression = boxpiercevalue[,5] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(7,
-                     expression = boxpiercevalue[,6] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(8,
-                     expression = boxpiercevalue[,7] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(9,
-                     expression = boxpiercevalue[,8] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(10,
-                     expression = boxpiercevalue[,9] < pval,
-                     colours = c("TRUE" = "#dddddd")) +
-                      rule_fill_discrete(11,
-                     expression = boxpiercevalue[,10] < pval,
-                     colours = c("TRUE" = "#dddddd"))
-condtable
+for (i in 1:10)
+{posautocorrelations[i] <- length(boxpiercevalue[,i][boxpiercevalue[,i] < pval & autocorrelationsdf[,i+1] > 0])
+ negautocorrelations[i] <- length(boxpiercevalue[,i][boxpiercevalue[,i] < pval & autocorrelationsdf[,i+1] < 0])
+}
+dfforoutput <- as.data.frame(rbind(posautocorrelations,negautocorrelations))
+rownames(dfforoutput) <- NULL
+dfforoutput <- cbind(c("Positive","Negative"),dfforoutput)
+colnames(dfforoutput) <- c("",paste("lag_",1:10,sep=""))
+kable(dfforoutput)
 ```
+
+Using a Box-Pierce test each industry return series was tested for autocorrelation with lags up to 10 working days. The results displayed above show the number of cases (industries) where the test provided evidence of autocorrelation at the 10% significant level. This has been split into cases where the original correlation was positive or negative. In most cases there is no statistically significant autocorrelation for an industry portfolio, but in cases where there is autocorrelation, this is often negative. There also seems to be a pattern where a lag of 4 has some evidence of negative relationships with returns, both within industry and across industries. The models built in the next section therefore use lags up to 4 as input variables.
 
 #Model Building
 
-Models were built to predict at time $\tau$, using data known at time $\tau$, the value of industry returns at time $\tau + 1$, using a rolling training window of 80 days ($\tau-80 to \tau-1$), to identify out of sample performance as per the model of (Goyal and Welch 2008).
+Models were built to predict at time $\tau$, using data known at time $\tau$, the value of industry returns at time $\tau + 1$, using a rolling training window of 80 days ($\tau-80$ to $\tau-1$), to identify out of sample performance as per the model of (Goyal and Welch 2008).
 
-The first model is a pure linear OLS model of returns as a function of the previous day's returns within the industry [Linear Own 1]. The second is a linear model of returns a function of the 4 previous day's returns within the industry [Linear Own 4]. The third is a linear model of returns as a function of the previous day's returns from all industries [Linear All 1].  The fourth is a LASSO model of returns as a function of the previous day's returns from all industries, this improves on the linear OLS model by penalising parameters [LASSO All 1], and therefore removing those that are not relevant within the time period, or that are in a group of multicollinear variables, of which only the most predictive variables are chosen (Chinco 2017). The fifth is a LASSO model using 4 lags from all industries [LASSO 4]. The sixth is LASSO model using 4 lags from all industries, and also including an indicator variable of whether there was a front page news article from the social media news aggregation platform Reddit containing the words of one of the major companies within that industry [LASSO 4 news], follwing on from many pieces of analysis that attempt to include news sources in financial prediction, e.g. (Hagenau. 2013).
+The first model is a pure linear OLS model of returns as a function of the previous day's returns within the industry [Lin Own 1], of the form: $y_{i,t} = \beta_0 + \beta_1 y_{i,t-1}$. The second is a linear model of returns a function of the 4 previous day's returns within the industry [Lin Own 4], of the form  $y_t = \beta_0 + \beta_1 y_{i,t-1} + \beta_2 y_{i,t-2} + \beta_3 y_{i,t-3} + \beta_4 y_{i,t-4}$. The third is a LASSO model of returns as a function of the 4 previous day's returns within the industry, this has the same functional form as the linear model above, but improves on it by penalising the absolute values of the coefficients [L Own 4], this has the effect of removing the coefficients on the lags that are not relevant within the time period, or that are in a group of multicollinear variables, of which only the most predictive variables are chosen (Chinco 2017).
 
-Other machine learning techniques were applied as part of this analysis: random forests and general boosting methods using both gaussian and laplace distributions, the results in terms of industry and lag structure were broadly similar, so results are not included here for purposes of space.
+The fourth is a linear model of returns as a function of the previous day's returns from all industries [Lin All 1], of the form: $y_t = \beta_0 + \beta_1 y_{i,t-1} + \sum_{k \neq i} \beta_k x_{k,t-1}$. This is likely to overfit to the training data, as there will be 49 dependent variables that are all only very loosely correlated to the independent variable. The fifth is a LASSO model of returns as a function of the previous day's returns from all industries, this has the same functional form as the above model but it is expected to outperform as it is able to "choose"  the most relevant variables [L 1].
 
-The results of these models are outlined below:
+The sixth is a LASSO model using 4 lags from all industries [L 4], of the form: $y_t = \beta_0 + \sum_{k} \beta_{k,1} x_{k,t-1} + \sum_{k} \beta_{k,2} x_{k,t-2} + + \sum_{k} \beta_{k,3} x_{k,t-3} + \sum_{k} \beta_{k,4} x_{k,t-4}$ at this stage the linear model would not be possible within a window of 80 as there would be more variables than data points and the system would be undetermined [LASSO 4]. It is expected that this will outperform the above as it includes the 4-lag variables which were seen to have some statistically significant correlations.
 
-```{r window}
-windowlength <- 80
+The seventh is LASSO model using 4 lags from all industries, and also including an indicator variable of whether there was at least one front page news article from the social media news aggregation platform Reddit containing the words of one of the major companies within that industry [L 4 news], of the form $y_t = \beta_0 + \sum_{k} \beta_{k,1} x_{k,t-1} + \sum_{k} \beta_{k,2} x_{k,t-2} + + \sum_{k} \beta_{k,3} x_{k,t-3} + \sum_{k} \beta_{k,4} x_{k,t-4} + \sum{k} \delta_{h,news} x_{h,news}$ . This is follwing on from many pieces of analysis that attempt to include news sources in financial prediction, e.g. (Hagenau 2013), to see if this can improve performance in this case, only industries where any news stories were identifiable were included, hence the h notation, where h $subset$ k.
+
+The eighth is a random forest model based on the 4 lagged data, which is an ensemble of classification trees built up using different subsets of the independent variables, it allows for non-linear combinations of data [RF 4], the number of trees and the minimum number of samples in a leaf are both tuned via in-window cross validation. The ninth is a generalised boosting regression tree technique, another ensembling technique where regression trees are added iteratively using the optimal gradient to reduce error [GBM 4], here there is a shrinkage rate applied to counteract overfitting which is tuned via in-window cross validation.
+
+The results of these models are detailed in the table below, with the $R^2_{oos}$ as calculated in (Goyal and Welch 2008) as = $1-\frac{\sum_{t=1}^{t=T}(r_t-\hat{r_t})^2}{\sum_{t=1}^{t=T}(r_t-\bar{r_t})^2}$. Which is 1 minus the ratio between the sum of squared errors from the prediction and the sum of squared errors from the historical mean. These refer to the prediction and the mean calculated at time $tau$ for time $\tau+1$, so reflect an out of sample (oos) estimate. A positive $R^2_{oos}$ indicates that across this time window, the model beats the historical mean. The $R^2_{oos}$ is shown for each industry, and the average across all industries.
+
+\newpage
+```{r}
+load("R2oos.Rdata")
+load("condR2table.RData")
+condr2table
 ```
 
-*to include*
+#Model Performance
+
+Firstly, as expected, these models do not perform particularly well in comparison to the historical mean approach, using previous equity returns does not help explain much of the variance in future equity returns, and therefore are not particularly useful for prediction. However some models do perform better than others. 
+
+As expected, [Lin All 4] performs worse than [Lin All 1], which performs worse than [Lin Own 1], this is likely due to overfitting [EXPLAIN OVERFITTING?].
+
+When using the LASSO approach which penalises parameters, a better result is achieved, with a positive $R^2_{oos}$ for 8 industries using [LASS own 4], for 12 industries with [LASS All 1], and for 15 industries with [LASS All 4]. This is because the LASSO approach "selects" parameters to be included based on their relevance at the time, and is therefore able to identify sparse useful signals (Chinco 2017).
+
+The addition of news information from Reddit did not improve accuracy using the LASSO, this could be because the signals that are represented there are represented in the returns on the same day, so they do not add value for predicting tomorrow's returns. It could also be because of the sparsity of financial news in this dataset, the source was a public social network Reddit, there was not often two pieces of news within an 80 day period, so the rolling window models were unable to train to pick up on these signals.  A more financial news website such as Reuters may have been more dense and also more predictive.
+
+Non linear methods were also not particularly effective, the random forest which allows mult, and the gaussian  
 
 ```{r goyal}
 #For Goyal plots
@@ -185,8 +195,19 @@ windowlength <- 80
 colCumSums <- function(x) {
   for(i in seq_len(dim(x)[2])) { x[,i] <- cumsum(x[,i]) }; x
 }
-
 ```
+
+#Parameter Inclusion
+
+The table below shows for the 4 lagged all industry LASSO model [L 4], the number of windows for which the trained model had a coefficient that was not equal to 0. It shows this for each of own-4 lags, and then shows the top 2 most used parameters that are not the own industry's lags. This is out of a total of [NUMBER] windows.
+
+\newpage
+```{r}
+load("coefcounttable.Rdata")
+kable(coefcounttable)
+```
+
+#Conclusion
 
 
 ## References
@@ -205,21 +226,10 @@ Goyal, A., Welch, I. (2007) A Comprehensive Look at the Empirical Performance of
 
 Hagenau. M, Leibemann, M. Neumann. D. (2013) Automated news reading: Stock price prediction based on financial news using context-capturing features. *Decision Support Systems* 55(3), 685-697.
 
+Lewellen, J. (2002) Momentum and Autocorrelation in Stock Returns. *The Review of Financial Studies* 15(2), 533-563
+
 Lo, A., MacKinlay A. C. (1990) When are contrarian profits due to stock market overreaction? *Review of Financial Studies* 3(2), 175–205.
 
 Moskowitz, T., Grinblatt M (1999) Do Industries Explain Momentum? *The Journal of Finance* 54 (4), 1249-1290. 
 
 Menzly, L., Ozbas O. (2010) Market segmentation and cross-predictability of returns. *Journal of Finance* 65, 1555–80.
-
-It is well known that momentum is not the same as positive autocorrelation: momentum is a cross-sectional result (winners beat losers), while autocorrelation is a time-series phenomenon (a stock's past and future returns are correlated).
-http://finance.martinsewell.com/stylized-facts/dependence/Lewellen2002.pdf
-Negative x correlation month -> year.
-
-VAR: https://cran.r-project.org/web/packages/vars/vignettes/vars.pdf
-
-Journal of Statistical Software
-October 2006, Volume 17, Issue 2. http://www.jstatsoft.org/
-
-News Implied Volatility and Disaster Concerns http://faculty.som.yale.edu/alanmoreira/Papers/NVIX.pdf
-
-https://www.treasury.gov/resource-center/data-chart-center/interest-rates/Pages/TextView.aspx?data=billRatesYear&year=2015
